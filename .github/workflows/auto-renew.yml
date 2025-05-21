@@ -26,8 +26,7 @@ jobs:
         env:
           USERNAME: ${{ secrets.USERNAME }}                 # 你的 EUserv 登录名（或邮箱），可多个用空格分隔
           PASSWORD: ${{ secrets.PASSWORD }}                 # 密码，同样可用空格分隔
-          MAILPARSER_DOWNLOAD_URL_ID: ${{ secrets.MAILPARSER_DOWNLOAD_URL_ID }}
- }}  # mailparser.io 下载 ID，按账号顺序空格分隔
+          MAILPARSER_DOWNLOAD_URL_ID: ${{ secrets.MAILPARSER_DOWNLOAD_URL_ID }}  # mailparser.io 下载 ID，按账号顺序空格分隔
           TRUECAPTCHA_USERID: ${{ secrets.TRUECAPTCHA_USERID }}         # （可选）你的 TrueCaptcha 用户 ID
           TRUECAPTCHA_APIKEY: ${{ secrets.TRUECAPTCHA_APIKEY }}         # （可选）你的 TrueCaptcha API Key
           RECEIVER_EMAIL: ${{ secrets.NOTIFY_EMAIL }}               # （可选）收邮件通知

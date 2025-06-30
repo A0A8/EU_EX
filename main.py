@@ -50,8 +50,8 @@ PASSWORD = os.environ["PASSWORD"]  # 密码
 # 'error': '101.0 above free usage limit 100 per day and no balance',
 # 'requestId': '7690c065-70e0-4757-839b-5fd8381e65c7'
 # }
-TRUECAPTCHA_USERID = os.environ.get["TRUECAPTCHA_USERID"]
-TRUECAPTCHA_APIKEY = os.environ.get["TRUECAPTCHA_APIKEY"]
+TRUECAPTCHA_USERID = os.environ.get("TRUECAPTCHA_USERID")
+TRUECAPTCHA_APIKEY = os.environ.get("TRUECAPTCHA_APIKEY")
 
 # Extract key data from your emails, automatically. https://mailparser.io 
 # 30 Emails/Month, 10 inboxes and unlimited downloads for free.

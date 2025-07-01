@@ -117,52 +117,53 @@ def get_pin_from_mailparser(url_id):
 
 def login(username, password):
     """
-    自动从登录页抓取表单action和所有input字段，提交表单登录
+    自动抓取表单并登录，保留所有隐藏字段，POST 到 action URL
     """
     session = requests.Session()
-    # 1) GET 登录页
     login_page = session.get("https://support.euserv.com/index.iphp", headers={"User-Agent": USER_AGENT}, proxies=PROXIES)
     soup = BeautifulSoup(login_page.text, "html.parser")
 
-    # 2) 找到登录表单
-    form = soup.find("form", {"name": "login"}) or soup.find("form", {"id": "login"}) or soup.find("form")
+    # 找到表单
+    form = soup.find("form")
     if not form or not form.get("action"):
-        log("[Login] 未找到登录表单或 action")
+        log("[Login] 未找到登录表单或 action 属性")
         return None, session
 
-    # 从<form>里读 action
-action = form["action"]
-# 如果 URL 里没带 sess_id，就加上去
-if "?sess_id=" not in action:
-    sid_input = form.find("input", {"name": "sess_id"})
-    sid_val = sid_input["value"] if sid_input else ""
-    action = f"{action}?sess_id={sid_val}"
-# 补全相对路径
-action = requests.compat.urljoin(login_page.url, action)
+    action = form["action"]
+    # 如果 action 没有 sess_id，就补上
+    if "?sess_id=" not in action:
+        inp_sid = form.find("input", {"name": "sess_id"})
+        if inp_sid and inp_sid.get("value"):
+            action = f"{action}?sess_id={inp_sid['value']}"
 
-    # 3) 提取所有 input 字段
+    # 补全相对路径
+    action = requests.compat.urljoin(login_page.url, action)
+    log(f"[Login] 表单提交到: {action}")
+
+    # 收集表单所有字段
     data = {}
     for inp in form.find_all("input"):
         name = inp.get("name")
         if not name:
             continue
-        # 默认取 value，有的字段留空
         data[name] = inp.get("value", "")
 
-    # 4) 覆盖用户名和密码
+    # 覆盖用户名和密码
     data["email"] = username
     data["password"] = password
-    data["subaction"] = "login"  # 确保登录动作
+    data["subaction"] = "login"
 
-    log(f"[Login] 表单提交到 {action}")
-    log(f"[Login] 表单数据示例：{ {k: data[k] for k in ('email','password','sess_id') if k in data} }")
+    # 打印关键字段以供调试
+    log(f"[Login] 提交字段 sess_id: {data.get('sess_id')}")
 
-    # 5) POST 登录
-    resp = session.post(action, headers={"User-Agent": USER_AGENT, "Referer": login_page.url}, data=data, proxies=PROXIES)
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Referer": login_page.url,
+    }
+    resp = session.post(action, headers=headers, data=data, proxies=PROXIES)
     snippet = resp.text[:500].replace("\n", " ")
-    log(f"[Login] 返回内容：{snippet}")
+    log(f"[Login] 返回内容: {snippet}")
 
-    # 6) 判断登录
     if "Hello" in resp.text or "logout" in resp.text.lower():
         log("[Login] 登录成功")
         return session.cookies.get("PHPSESSID"), session

@@ -21,10 +21,11 @@ jobs:
       YD_APP_PWD: ${{ secrets.YD_APP_PWD }}
 
     steps:
-    - uses: actions/checkout@v3
-    - uses: actions/setup-python@v4
-      with: python-version: '3.9'
-    - run: |
-        pip install --upgrade pip
-        pip install ddddocr requests beautifulsoup4 bs4
-    - run: python euserv_auto_renew.py
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+      - run: |
+          pip install --upgrade pip
+          pip install ddddocr requests beautifulsoup4
+      - run: python euserv_auto_renew.py

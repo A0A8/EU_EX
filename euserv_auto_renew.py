@@ -194,6 +194,8 @@ def get_servers(sess_id, session):
         servers[server_id] = renew_flag
     return servers
 
+下面给出修正后的 renew() 完整函数，重点在第 2 步 强制重新发送 PIN，并且加了多次重试获取 PIN 的逻辑，确保拿到最新且有效的 PIN：
+
 def renew(sess_id: str, session: requests.Session, password: str, order_id: str, mailparser_id: str) -> bool:
     url = "https://support.euserv.com/index.iphp"
     headers = {
@@ -202,7 +204,7 @@ def renew(sess_id: str, session: requests.Session, password: str, order_id: str,
         "Referer": f"https://support.euserv.com/index.iphp?sess_id={sess_id}",
     }
 
-    # 1) 选择订单详情
+    # 1) 选择订单详情页面
     session.post(url, headers=headers, data={
         "Submit": "Extend contract",
         "sess_id": sess_id,
@@ -211,29 +213,37 @@ def renew(sess_id: str, session: requests.Session, password: str, order_id: str,
         "choose_order_subaction": "show_contract_details",
     }, proxies=PROXIES)
 
-    # 2) 触发 PIN 弹窗
+    # 2) 触发安全密码对话框，并重新发送 PIN 邮件
     prefix = f"kc2_customer_contract_details_extend_contract_{order_id}"
+    # 弹窗
     session.post(url, headers=headers, data={
         "sess_id": sess_id,
         "subaction": "show_kc2_security_password_dialog",
         "prefix": prefix,
         "type": 1,
     }, proxies=PROXIES)
+    # 强制重新发送 PIN
+    session.post(url, headers=headers, data={
+        "sess_id": sess_id,
+        "subaction": "kc2_security_password_send_pin",
+        "ident": prefix,
+    }, proxies=PROXIES)
 
-    # 3) 等待并获取 PIN（重试机制）
-    time.sleep(WAITING_TIME_OF_PIN)
+    # 3) 等待 PIN 到达并重试拉取
     pin = ""
-    for _ in range(3):
+    for attempt in range(1, 6):
+        time.sleep(WAITING_TIME_OF_PIN)
         pin = get_pin_from_mailparser(mailparser_id)
-        if pin:
+        log(f"[Mailparser] 第 {attempt} 次获取 PIN: {pin}")
+        # 简单校验：6位数字
+        if re.match(r"^\d{6}$", pin):
             break
-        time.sleep(5)
-    log(f"[Mailparser] 获取到 PIN: {pin}")
-    if not pin:
-        log("[Renew] PIN 获取失败")
+
+    if not re.match(r"^\d{6}$", pin):
+        log("[Renew] 多次尝试后仍未获取到有效 PIN")
         return False
 
-    # 4) 用 PIN 换取 token
+    # 4) 用 PIN 换取续费 token
     r_token = session.post(url, headers=headers, data={
         "auth": pin,
         "sess_id": sess_id,
@@ -246,7 +256,7 @@ def renew(sess_id: str, session: requests.Session, password: str, order_id: str,
     js = r_token.json()
     token = js.get("token", {}).get("value", "")
     if not token:
-        log(f"[Renew] token 失败，响应：{r_token.text[:200]}")
+        log(f"[Renew] 获取 token 失败，响应：{r_token.text[:200]}")
         return False
 
     # 5) 提交续期
@@ -257,13 +267,30 @@ def renew(sess_id: str, session: requests.Session, password: str, order_id: str,
         "token": token,
     }, proxies=PROXIES)
     final.raise_for_status()
+
+    # 6) 验证返回页面确认
     text = final.text.lower()
     if "contract has been extended" in text or "successfully extended" in text:
-        log(f"[Renew] Server {order_id} 续费成功")
+        log(f"[Renew] ServerID {order_id} 续费成功")
         return True
-    snippet = final.text[:300].replace("\n", " ")
-    log(f"[Renew] 未检测到续费成功关键字，响应：{snippet}")
+    snippet = final.text[:300].replace("\n"," ")
+    log(f"[Renew] 未检测到续费成功提示，响应片段：{snippet}")
     return False
+
+主要改动说明：
+
+强制重新发送 PIN：调用 kc2_security_password_send_pin 子动作，确保 Mailparser 拉到最新邮件。
+
+多次重试获取 PIN：循环 5 次，每次间隔 WAITING_TIME_OF_PIN 秒，并校验是否为 6 位数字。
+
+token 请求 和 续期提交 保持不变，但 prefix/ident 一致。
+
+最后根据返回页面内容判断真正的续费成功。
+
+
+请用这段代码替换你脚本中的 renew() 函数，然后再跑一次脚本，看日志中 [Mailparser] 第 N 次获取 PIN: 的值是否正确，及是否出现 “续费成功” 的确认输出。
+
+
 
 def main():
     if not USERNAME or not PASSWORD or not MAILPARSER_DOWNLOAD_URL_ID:

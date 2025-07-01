@@ -72,6 +72,15 @@ def solve_captcha(session):
 def login(user, pwd):
     base = "https://support.euserv.com/index.iphp"
     session = requests.Session()
+    headers = {"User-Agent": USER_AGENT}
+
+    # 第一次尝试，打印首页 HTML，帮助我们看页面到底长什么样
+    r0 = session.get(base, headers=headers, proxies=PROXIES)
+    print("\n\n=== 首页 HTML（前1000字符） ===")
+    print(r0.text[:1000])
+    print("=== End HTML ===\n\n")
+    # 直接 return，先看日志输出
+    return "-1", session
     for i in range(1, LOGIN_RETRIES+1):
         log(f"[Login] 尝试 {i}")
         r0 = session.get(base)

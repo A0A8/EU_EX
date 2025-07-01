@@ -188,75 +188,77 @@ def get_servers(sess_id, session):
         servers[server_id] = renew_flag
     return servers
 
-def renew(sess_id, session, password, order_id, mailparser_dl_url_id):
+def renew(sess_id: str, session: requests.Session, password: str, order_id: str, mailparser_dl_url_id: str) -> bool:
     url = "https://support.euserv.com/index.iphp"
     headers = {
-        "User-Agent": USER_AGENT,
-        "Host": "support.euserv.com",
+        "User-Agent": user_agent,
         "Origin": "https://support.euserv.com",
-        "Referer": "https://support.euserv.com/index.iphp",
+        "Referer": f"https://support.euserv.com/index.iphp?sess_id={sess_id}",
     }
 
-    # 选择订单
-    data = {
+    # 1) 选择订单详情
+    session.post(url, headers=headers, data={
         "Submit": "Extend contract",
         "sess_id": sess_id,
         "ord_no": order_id,
         "subaction": "choose_order",
         "choose_order_subaction": "show_contract_details",
-    }
-    session.post(url, headers=headers, data=data)
+    }, proxies=PROXIES)
 
-    # 触发安全密码弹窗及发送PIN码邮件
+    # 2) 触发 PIN 验证弹窗（发送 PIN 邮件）
     session.post(url, headers=headers, data={
         "sess_id": sess_id,
         "subaction": "show_kc2_security_password_dialog",
-        "prefix": "kc2_customer_contract_details_extend_contract_",
-        "type": "1",
-    })
+        "prefix": f"kc2_customer_contract_details_extend_contract_{order_id}",
+        "type": 1,
+    }, proxies=PROXIES)
 
+    # 3) 等待 PIN 到达
     time.sleep(WAITING_TIME_OF_PIN)
-
     pin = get_pin_from_mailparser(mailparser_dl_url_id)
+    log(f"[Mailparser] 获取到 PIN: {pin}")
     if not pin:
-        log("[Renew] 获取PIN失败，续费失败")
+        log("[Renew] PIN 获取失败")
         return False
 
-    # 使用PIN码获取token
-    data = {
+    # 4) 用 PIN 换 token
+    r_token = session.post(url, headers=headers, data={
         "auth": pin,
         "sess_id": sess_id,
         "subaction": "kc2_security_password_get_token",
-        "prefix": "kc2_customer_contract_details_extend_contract_",
+        "prefix": f"kc2_customer_contract_details_extend_contract_{order_id}",
         "type": 1,
         "ident": f"kc2_customer_contract_details_extend_contract_{order_id}",
-    }
-    resp = session.post(url, headers=headers, data=data)
-    if not resp.ok:
-        log(f"[Renew] 获取token请求失败，状态码: {resp.status_code}")
-        return False
-
-    resp_json = resp.json()
-    if resp_json.get("rs") != "success":
-        log(f"[Renew] 获取token失败，响应: {resp.text}")
-        return False
-
-    token = resp_json.get("token", {}).get("value", "")
+    }, proxies=PROXIES)
+    r_token.raise_for_status()
+    js = r_token.json()
+    token = js.get("token", {}).get("value", "")
     if not token:
-        log("[Renew] token为空，续费失败")
+        log(f"[Renew] 获取 token 失败，响应片段：{r_token.text[:200]}")
         return False
 
-    # 提交续费请求
-    data = {
+    # 5) **真正提交续期请求**
+    data_final = {
         "sess_id": sess_id,
         "ord_id": order_id,
         "subaction": "kc2_customer_contract_details_extend_contract_term",
         "token": token,
     }
-    session.post(url, headers=headers, data=data)
-    time.sleep(5)
-    log(f"[Renew] ServerID: {order_id} 续费成功")
-    return True
+    final_resp = session.post(url, headers=headers, data=data_final, proxies=PROXIES)
+    final_resp.raise_for_status()
+
+    # 6) **验证续期是否真的成功**
+    text = final_resp.text.lower()
+    # 请根据你在浏览器里看到的文字替换下面关键字
+    success_keywords = ["contract has been extended", "renewal confirmed", "successfully extended"]
+    if any(k in text for k in success_keywords):
+        log(f"[Renew] ServerID: {order_id} 续费成功（页面确认）")
+        return True
+    else:
+        # 打印返回页面前 300 字符，帮你定位失败原因
+        snippet = final_resp.text[:300].replace("\n", " ")
+        log(f"[Renew] 续费后页面没有检测到成功关键字，响应片段：{snippet}")
+        return False
 
 def main():
     if not USERNAME or not PASSWORD or not MAILPARSER_DOWNLOAD_URL_ID:

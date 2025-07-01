@@ -116,51 +116,61 @@ def get_pin_from_mailparser(url_id):
 # 登录函数
 
 def login(username, password):
-    url = "https://support.euserv.com/index.iphp"
+    """
+    返回 (sess_id, session) 或 (None, session) 登录失败
+    """
+    base = "https://support.euserv.com/index.iphp"
+    session = requests.Session()
+
+    # 1) GET 起始页面
+    resp0 = session.get(base, headers={"User-Agent": USER_AGENT}, proxies=PROXIES)
+    soup0 = BeautifulSoup(resp0.text, "html.parser")
+
+    # 获取 sess_id
+    inp = soup0.find("input", {"name": "sess_id"})
+    if not inp:
+        log("[Login] 未找到 sess_id 输入框")
+        return None, session
+    sess_id = inp["value"]
+    login_url = f"{base}?sess_id={sess_id}"
+    log(f"[Login] sess_id = {sess_id}")
+
+    # 获取可能存在的 formhash
+    formhash = ""
+    fh = soup0.find("input", {"name": "formhash"})
+    if fh and fh.get("value"):
+        formhash = fh["value"]
+        log(f"[Login] formhash = {formhash}")
+
+    # 2) POST 登录
+    data = {
+        "email": username,
+        "password": password,
+        "form_selected_language": "en",
+        "Submit": "Login",
+        "subaction": "login",
+        "sess_id": sess_id,
+    }
+    if formhash:
+        data["formhash"] = formhash
+
     headers = {
         "User-Agent": USER_AGENT,
-        "Referer": "https://support.euserv.com/index.iphp"
+        "Referer": login_url,
     }
-    session = requests.Session()
-    for i in range(1, LOGIN_MAX_RETRY_COUNT+1):
-        log(f"[Login] 尝试第 {i} 次")
-        r = session.get(url, headers=headers, proxies=PROXIES)
-        sid = re.search(r'PHPSESSID=(\w+);', str(r.headers))
-        if not sid:
-            continue
-        sess_id = sid.group(1)
-        session.get("https://support.euserv.com/pic/logo_small.png", headers=headers, proxies=PROXIES)
-        data = {
-            "email": username,
-            "password": password,
-            "form_selected_language": "en",
-            "Submit": "Login",
-            "subaction": "login",
-            "sess_id": sess_id
-        }
-        resp = session.post(url, headers=headers, data=data, proxies=PROXIES)
-        snippet = resp.text[:500].replace("\n"," ")
-        log(f"[Login] 响应: {snippet}")
-        if "Hello" in resp.text or "Confirm or change" in resp.text:
-            log("[Login] 成功")
-            return sess_id, session
-        if "captcha" in resp.text.lower():
-            log("[Login] 需要验证码")
-            code = solve_captcha(session)
-            log(f"[Login] 验证码: {code}")
-            if not code:
-                continue
-            data['captcha_code'] = code
-            resp2 = session.post(url, headers=headers, data=data, proxies=PROXIES)
-            if "captcha" not in resp2.text.lower():
-                log("[Login] 验证码通过")
-                return sess_id, session
-        log("[Login] 失败，重试")
-    log("[Login] 失败超限")
-    return "-1", session
 
-# 获取服务器列表、续费等逻辑省略，重点修正 renew()
+    resp1 = session.post(login_url, headers=headers, data=data, proxies=PROXIES)
+    snippet = resp1.text[:500].replace("\n", " ")
+    log(f"[Login] 登录返回: {snippet}")
 
+    # 3) 判断是否登录成功
+    if "logout" in resp1.text.lower() or "hello" in resp1.text.lower():
+        log("[Login] 登录成功")
+        return sess_id, session
+    else:
+        log("[Login] 登录失败")
+        return None, session
+        
 def renew(sess_id, session, password, order_id, mailparser_id):
     url = "https://support.euserv.com/index.iphp"
     headers = {"User-Agent": USER_AGENT, "Referer": f"https://support.euserv.com/index.iphp?sess_id={sess_id}"}

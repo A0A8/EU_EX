@@ -114,32 +114,26 @@ def get_pin_from_mailparser(url_id):
         log(f"[Mailparser] 获取 PIN 失败: {e}")
         return ""
 
-def login(username, password):
+def login(username: str, password: str) -> (str, requests.Session):
     url = "https://support.euserv.com/index.iphp"
-    captcha_image_url = "https://support.euserv.com/securimage_show.php"
-    headers = {"User-Agent": USER_AGENT, "Origin": "https://www.euserv.com"}
-
+    headers = {
+        "User-Agent": user_agent,
+        "Origin": "https://www.euserv.com",
+        "Referer": "https://support.euserv.com/index.iphp",
+    }
     session = requests.Session()
 
     for attempt in range(1, LOGIN_MAX_RETRY_COUNT + 1):
         log(f"[Login] 第 {attempt} 次尝试登录")
-        resp = session.get(url, headers=headers)
-        if resp.status_code != 200:
-            log("[Login] 获取登录页面失败")
-            continue
+        sess = session.get(url, headers=headers)
+        try:
+            sess_id = re.findall("PHPSESSID=(\\w{10,100});", str(sess.headers))[0]
+        except IndexError:
+            log("[Login] 无法从响应头获取 sess_id")
+            return "-1", session
 
-        # 获取PHPSESSID
-        sess_id_match = re.search(r"PHPSESSID=(\w+);", str(resp.headers))
-        sess_id = sess_id_match.group(1) if sess_id_match else ""
-
-        if not sess_id:
-            log("[Login] 未找到 PHPSESSID")
-            continue
-
-        # 访问logo图，模拟浏览器行为
         session.get("https://support.euserv.com/pic/logo_small.png", headers=headers)
 
-        # 先发起登录请求
         login_data = {
             "email": username,
             "password": password,
@@ -148,40 +142,29 @@ def login(username, password):
             "subaction": "login",
             "sess_id": sess_id,
         }
-        login_resp = session.post(url, headers=headers, data=login_data)
+        f = session.post(url, headers=headers, data=login_data)
 
-        # 判断是否登录成功
-        if "Hello" in login_resp.text or "Confirm or change your customer data here" in login_resp.text:
+        # 打印登录响应内容前1000字符，方便调试
+        snippet = f.text[:1000].replace('\n', ' ').replace('\r', ' ')
+        log(f"[Login] 登录响应内容前1000字符:\n{snippet}")
+
+        if "Hello" in f.text or "Confirm or change your customer data here" in f.text:
             log("[Login] 登录成功")
             return sess_id, session
 
-        # 需要验证码
-        if "To finish the login process please solve the following captcha." in login_resp.text:
-            log("[Login] 需要验证码识别")
+        # 检查是否需要验证码处理（可在此基础上集成你的验证码识别）
+        if "To finish the login process please solve the following captcha." in f.text:
+            log("[Login] 需要验证码，登录流程暂未处理验证码，请在此处集成验证码识别代码")
+            # 这里可调用你的验证码识别流程
+            # 例如：captcha_code = your_captcha_solver(...)
+            # 发送验证码进行登录重试等逻辑
+            # 为了示范，此处跳过，继续下一次尝试
+            pass
 
-            # 获取验证码图片
-            captcha_img_bytes = session.get(captcha_image_url, headers=headers).content
-            captcha_code = solve_captcha(captcha_img_bytes, OCRSPACE_API_KEY)
-            if not captcha_code:
-                log("[Login] 无法识别验证码，跳过此轮登录尝试")
-                continue
-
-            # 带验证码重新登录
-            login_data.update({
-                "captcha_code": captcha_code
-            })
-            login_resp2 = session.post(url, headers=headers, data=login_data)
-            if "To finish the login process please solve the following captcha." not in login_resp2.text:
-                log("[Login] 验证码验证通过，登录成功")
-                return sess_id, session
-            else:
-                log("[Login] 验证码错误或登录失败，尝试下一次")
-        else:
-            log("[Login] 登录失败，未知原因，尝试下一次")
+        log("[Login] 登录失败，未知原因，尝试下一次")
 
     log("[Login] 登录失败超过最大重试次数")
     return "-1", session
-
 def get_servers(sess_id, session):
     url = f"https://support.euserv.com/index.iphp?sess_id={sess_id}"
     headers = {"User-Agent": USER_AGENT, "Origin": "https://www.euserv.com"}

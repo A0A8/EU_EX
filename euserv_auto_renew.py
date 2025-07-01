@@ -13,6 +13,12 @@ import requests
 from bs4 import BeautifulSoup
 import ddddocr
 
+USE_PROXY = False  # 改成 True 就启用代理
+PROXIES = {
+    "http": "http://127.0.0.1:7890",
+    "https": "http://127.0.0.1:7890",
+} if USE_PROXY else {}
+
 # 账号密码，多个账号用空格隔开
 USERNAME = os.environ.get("USERNAME", "")
 PASSWORD = os.environ.get("PASSWORD", "")

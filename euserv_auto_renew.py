@@ -2,168 +2,213 @@
 # -*- coding: utf-8 -*-
 
 import os
-import time
 import re
+import time
 import requests
+from bs4 import BeautifulSoup
 import ddddocr
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.keys import Keys
 
-# === 配置项 ===
+# ===== 配置读取 =====
 USERNAME = os.environ.get("USERNAME", "")
 PASSWORD = os.environ.get("PASSWORD", "")
 MAILPARSER_DOWNLOAD_URL_ID = os.environ.get("MAILPARSER_DOWNLOAD_URL_ID", "")
-TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN", "")
-TG_USER_ID = os.environ.get("TG_USER_ID", "")
 
-# === 函数定义 ===
+PROXIES = {
+    "http": os.environ.get("HTTP_PROXY", ""),
+    "https": os.environ.get("HTTPS_PROXY", ""),
+} if os.environ.get("USE_PROXY", "false").lower() == "true" else {}
 
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+)
+
+HEADERS = {
+    "User-Agent": USER_AGENT
+}
+
+# ===== 日志函数 =====
+logs = []
 def log(msg):
     print(msg)
+    logs.append(msg)
 
-def tg_notify(msg):
-    if TG_BOT_TOKEN and TG_USER_ID:
-        requests.post(
-            f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage",
-            data={"chat_id": TG_USER_ID, "text": msg}
-        )
-
-def get_latest_pin(mailparser_id):
+# ===== OCR 验证码处理 =====
+def solve_captcha(session):
+    ocr = ddddocr.DdddOcr()
+    url = "https://support.euserv.com/securimage_show.php"
+    resp = session.get(url, headers=HEADERS, proxies=PROXIES)
+    code = ocr.classification(resp.content)
     try:
-        url = f"https://files.mailparser.io/d/{mailparser_id}"
-        r = requests.get(url)
+        result = str(eval(code.lower().replace('x', '*')))
+        return result
+    except:
+        return code
+
+# ===== 登录处理 =====
+def login(username, password):
+    base_url = "https://support.euserv.com/index.iphp"
+    session = requests.Session()
+
+    for attempt in range(1, 6):
+        log(f"[Login] 尝试第 {attempt} 次")
+        r = session.get(base_url, headers=HEADERS, proxies=PROXIES)
+        if "sess_id" not in r.url:
+            log("[Login] sess_id 未找到")
+            continue
+
+        sess_id = re.findall(r"sess_id=([a-zA-Z0-9]+)", r.url)[0]
+        login_url = f"{base_url}?sess_id={sess_id}"
+
+        data = {
+            "email": username,
+            "password": password,
+            "form_selected_language": "en",
+            "Submit": "Login",
+            "subaction": "login",
+            "sess_id": sess_id
+        }
+
+        resp = session.post(login_url, headers=HEADERS, data=data, proxies=PROXIES)
+
+        if "Hello" in resp.text or "Confirm or change your customer data here" in resp.text:
+            log("[Login] 登录成功")
+            return sess_id, session
+
+        if "captcha" in resp.text:
+            log("[Login] 检测到验证码，尝试识别")
+            code = solve_captcha(session)
+            data["captcha_code"] = code
+            resp = session.post(login_url, headers=HEADERS, data=data, proxies=PROXIES)
+            if "Hello" in resp.text:
+                log("[Login] 登录成功")
+                return sess_id, session
+
+        log("[Login] 登录失败")
+
+    log("[Login] 登录失败超限")
+    return None, session
+
+# ===== 获取续期服务列表 =====
+def get_servers(sess_id, session):
+    url = f"https://support.euserv.com/index.iphp?sess_id={sess_id}&subaction=show_kc2_contract_details"
+    resp = session.get(url, headers=HEADERS, proxies=PROXIES)
+    soup = BeautifulSoup(resp.text, "html.parser")
+    ids = {}
+    for option in soup.select("select[name=ord_no] option"):
+        val = option.get("value")
+        if val and "contract will be extended" not in option.text:
+            ids[val] = True
+        else:
+            ids[val] = False
+    return ids
+
+# ===== 获取 PIN =====
+def get_pin(mailparser_id):
+    try:
+        r = requests.get(f"https://files.mailparser.io/d/{mailparser_id}", proxies=PROXIES)
         r.raise_for_status()
-        data = r.json()
-        return data[0].get('pin', '')
-    except Exception as e:
-        log(f"[PIN] 获取失败: {e}")
+        j = r.json()
+        return j[0].get("pin", "")
+    except:
         return ""
 
-def solve_captcha(image_bytes):
-    ocr = ddddocr.DdddOcr()
+# ===== 执行续期 =====
+def renew(sess_id, session, order_id, mailparser_id):
+    url = "https://support.euserv.com/index.iphp"
+    prefix = f"kc2_customer_contract_details_extend_contract_{order_id}"
+
+    def post(data):
+        return session.post(url, headers=HEADERS, data=data, proxies=PROXIES)
+
+    post({
+        "Submit": "Extend contract",
+        "sess_id": sess_id,
+        "ord_no": order_id,
+        "subaction": "choose_order",
+        "choose_order_subaction": "show_contract_details"
+    })
+
+    post({
+        "sess_id": sess_id,
+        "subaction": "show_kc2_security_password_dialog",
+        "prefix": prefix,
+        "type": 1
+    })
+
+    post({
+        "sess_id": sess_id,
+        "subaction": "kc2_security_password_send_pin",
+        "ident": prefix
+    })
+
+    pin = ""
+    for i in range(5):
+        time.sleep(15)
+        pin = get_pin(mailparser_id)
+        log(f"[PIN] 第 {i+1} 次尝试获取 PIN: {pin}")
+        if re.fullmatch(r"\d{6}", pin):
+            break
+
+    if not re.fullmatch(r"\d{6}", pin):
+        log("[PIN] 获取失败")
+        return
+
+    token_resp = post({
+        "auth": pin,
+        "sess_id": sess_id,
+        "subaction": "kc2_security_password_get_token",
+        "prefix": prefix,
+        "type": 1,
+        "ident": prefix
+    })
+
     try:
-        text = ocr.classification(image_bytes)
-        log(f"[OCR] 原始: {text}")
-        expr = text.replace("x", "*").replace("X", "*").replace(" ", "")
-        if re.match(r"^[\d\+\-\*/]+$", expr):
-            result = eval(expr)
-            return str(int(result))
-    except Exception as e:
-        log(f"[OCR] 识别失败: {e}")
-    return ""
-
-def setup_driver():
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    driver = webdriver.Chrome(options=chrome_options)
-    return driver
-
-def login_and_renew(driver, username, password, mailparser_id):
-    log("[Main] 打开 EUserv 登录页")
-    driver.get("https://support.euserv.com/index.iphp")
-
-    log("[Main] 输入用户名密码")
-    driver.find_element(By.NAME, "email").send_keys(username)
-    driver.find_element(By.NAME, "password").send_keys(password)
-
-    if driver.page_source.find("captcha_code") != -1:
-        log("[Captcha] 检测到验证码")
-        img_elem = driver.find_element(By.XPATH, "//img[contains(@src, 'securimage_show.php')]")
-        captcha_bytes = img_elem.screenshot_as_png
-        solved = solve_captcha(captcha_bytes)
-        log(f"[Captcha] 输入验证码: {solved}")
-        driver.find_element(By.NAME, "captcha_code").send_keys(solved)
-
-    driver.find_element(By.NAME, "Submit").click()
-    time.sleep(2)
-
-    if "Hello" not in driver.page_source:
-        log("[Login] 登录失败")
+        token = token_resp.json().get("token", {}).get("value", "")
+    except:
+        log("[Renew] 获取 token 失败")
         return
 
-    log("[Login] 登录成功")
+    final = post({
+        "sess_id": sess_id,
+        "ord_id": order_id,
+        "subaction": "kc2_customer_contract_details_extend_contract_term",
+        "token": token
+    })
 
-    # 检查 VPS 列表
-    if "No active contracts found" in driver.page_source:
-        log("[VPS] 未发现可续费 VPS")
-        return
+    if "contract has been extended" in final.text.lower():
+        log(f"[Renew] {order_id} 续期成功")
+    else:
+        log(f"[Renew] {order_id} 续期失败")
 
-    # 进入 VPS 合同页
-    links = driver.find_elements(By.PARTIAL_LINK_TEXT, "Contract")
-    if not links:
-        log("[VPS] 没找到合同链接")
-        return
-
-    for idx, link in enumerate(links):
-        try:
-            log(f"[VPS] 第 {idx+1} 台尝试续费")
-            link.click()
-            time.sleep(2)
-
-            extend_btn = driver.find_element(By.XPATH, "//input[@value='Extend contract']")
-            extend_btn.click()
-            time.sleep(2)
-
-            pin_btn = driver.find_element(By.NAME, "kc2_security_password_send_pin")
-            pin_btn.click()
-            log("[PIN] 请求已发送")
-
-            time.sleep(15)
-            pin = get_latest_pin(mailparser_id)
-            log(f"[PIN] 获取: {pin}")
-            if not re.match(r"^\d{6}$", pin):
-                log("[PIN] 无效")
-                return
-
-            driver.find_element(By.NAME, "auth").send_keys(pin)
-            driver.find_element(By.NAME, "kc2_security_password_get_token").click()
-            time.sleep(2)
-
-            token_input = driver.find_element(By.NAME, "token")
-            token = token_input.get_attribute("value")
-            if not token:
-                log("[Token] 获取失败")
-                return
-
-            driver.find_element(By.NAME, "kc2_customer_contract_details_extend_contract_term").click()
-            time.sleep(2)
-
-            if "successfully extended" in driver.page_source.lower():
-                log("[Success] VPS续费成功")
-                tg_notify(f"EUserv 账号 {username} VPS 续费成功")
-            else:
-                log("[Failed] VPS续费可能失败")
-                tg_notify(f"EUserv 账号 {username} VPS 续费可能失败")
-        except Exception as e:
-            log(f"[Error] VPS续费异常: {e}")
-        finally:
-            driver.get("https://support.euserv.com/index.iphp")  # 回主页准备下一个
-
+# ===== 主函数入口 =====
 def main():
-    users = USERNAME.strip().split()
-    pwds = PASSWORD.strip().split()
-    pins = MAILPARSER_DOWNLOAD_URL_ID.strip().split()
+    users = USERNAME.split()
+    pwds = PASSWORD.split()
+    mids = MAILPARSER_DOWNLOAD_URL_ID.split()
 
-    if not (len(users) == len(pwds) == len(pins)):
-        log("[Main] 用户数与PIN数量不匹配")
-        return
+    for idx, user in enumerate(users):
+        print("=" * 20)
+        log(f"[Main] 开始续费第 {idx+1} 个账号：{user}")
 
-    driver = setup_driver()
+        sess_id, session = login(user, pwds[idx])
+        if not sess_id:
+            log("[Main] 登录失败")
+            continue
 
-    for i in range(len(users)):
-        log("=" * 30)
-        log(f"[Main] 开始续费第 {i+1} 个账号：{users[i]}")
-        try:
-            login_and_renew(driver, users[i], pwds[i], pins[i])
-        except Exception as e:
-            log(f"[Main] 账号 {users[i]} 执行异常：{e}")
+        servers = get_servers(sess_id, session)
+        log(f"[Main] 找到 {len(servers)} 台 VPS")
 
-    driver.quit()
-    log("[Main] 所有任务完成")
+        for vid, need in servers.items():
+            if need:
+                renew(sess_id, session, vid, mids[idx])
+            else:
+                log(f"[Main] Server {vid} 无需续期")
+
+        time.sleep(5)
+
+    print("=" * 20)
+    log("[Main] 续费任务结束")
 
 if __name__ == "__main__":
     main()

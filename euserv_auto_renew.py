@@ -13,7 +13,7 @@ import requests
 from bs4 import BeautifulSoup
 import ddddocr
 
-USE_PROXY = False  # 改成 True 就启用代理
+USE_PROXY = False
 PROXIES = {
     "http": "http://127.0.0.1:7890",
     "https": "http://127.0.0.1:7890",
@@ -194,7 +194,7 @@ def get_servers(sess_id, session):
         servers[server_id] = renew_flag
     return servers
 
-def renew(sess_id: str, session: requests.Session, password: str, order_id: str, mailparser_dl_url_id: str) -> bool:
+def renew(sess_id: str, session: requests.Session, password: str, order_id: str, mailparser_id: str) -> bool:
     url = "https://support.euserv.com/index.iphp"
     headers = {
         "User-Agent": user_agent,
@@ -211,7 +211,7 @@ def renew(sess_id: str, session: requests.Session, password: str, order_id: str,
         "choose_order_subaction": "show_contract_details",
     }, proxies=PROXIES)
 
-    # 2) 触发 PIN 验证弹窗（发送 PIN 邮件）
+    # 2) 触发 PIN 弹窗
     prefix = f"kc2_customer_contract_details_extend_contract_{order_id}"
     session.post(url, headers=headers, data={
         "sess_id": sess_id,
@@ -220,16 +220,21 @@ def renew(sess_id: str, session: requests.Session, password: str, order_id: str,
         "type": 1,
     }, proxies=PROXIES)
 
-    # 3) 等待 PIN 到达
+    # 3) 等待并获取 PIN（重试机制）
     time.sleep(WAITING_TIME_OF_PIN)
-    pin = get_pin_from_mailparser(mailparser_dl_url_id)
+    pin = ""
+    for _ in range(3):
+        pin = get_pin_from_mailparser(mailparser_id)
+        if pin:
+            break
+        time.sleep(5)
     log(f"[Mailparser] 获取到 PIN: {pin}")
     if not pin:
         log("[Renew] PIN 获取失败")
         return False
 
-    # 4) 用 PIN 换取 token —— 注意使用同一个 prefix 和 ident
-    token_resp = session.post(url, headers=headers, data={
+    # 4) 用 PIN 换取 token
+    r_token = session.post(url, headers=headers, data={
         "auth": pin,
         "sess_id": sess_id,
         "subaction": "kc2_security_password_get_token",
@@ -237,31 +242,28 @@ def renew(sess_id: str, session: requests.Session, password: str, order_id: str,
         "type": 1,
         "ident": prefix,
     }, proxies=PROXIES)
-    token_resp.raise_for_status()
-    js = token_resp.json()
+    r_token.raise_for_status()
+    js = r_token.json()
     token = js.get("token", {}).get("value", "")
     if not token:
-        log(f"[Renew] 获取 token 失败，响应片段：{token_resp.text}")
+        log(f"[Renew] token 失败，响应：{r_token.text[:200]}")
         return False
 
-    # 5) 提交续期请求
-    final_resp = session.post(url, headers=headers, data={
+    # 5) 提交续期
+    final = session.post(url, headers=headers, data={
         "sess_id": sess_id,
         "ord_id": order_id,
         "subaction": "kc2_customer_contract_details_extend_contract_term",
         "token": token,
     }, proxies=PROXIES)
-    final_resp.raise_for_status()
-
-    # 6) 验证续期是否真正成功
-    txt = final_resp.text.lower()
-    if "contract has been extended" in txt or "successfully extended" in txt:
-        log(f"[Renew] ServerID: {order_id} 续费确认成功")
+    final.raise_for_status()
+    text = final.text.lower()
+    if "contract has been extended" in text or "successfully extended" in text:
+        log(f"[Renew] Server {order_id} 续费成功")
         return True
-    else:
-        snippet = final_resp.text[:300].replace("\n"," ")
-        log(f"[Renew] 续费后响应未检测到成功提示，响应片段：{snippet}")
-        return False
+    snippet = final.text[:300].replace("\n", " ")
+    log(f"[Renew] 未检测到续费成功关键字，响应：{snippet}")
+    return False
 
 def main():
     if not USERNAME or not PASSWORD or not MAILPARSER_DOWNLOAD_URL_ID:

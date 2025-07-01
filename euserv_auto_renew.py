@@ -130,10 +130,15 @@ def login(username, password):
         log("[Login] 未找到登录表单或 action")
         return None, session
 
-    action = form["action"]
-    # 如果 action 不是完整 URL，就补齐
-    if not action.startswith("http"):
-        action = requests.compat.urljoin(login_page.url, action)
+    # 从<form>里读 action
+action = form["action"]
+# 如果 URL 里没带 sess_id，就加上去
+if "?sess_id=" not in action:
+    sid_input = form.find("input", {"name": "sess_id"})
+    sid_val = sid_input["value"] if sid_input else ""
+    action = f"{action}?sess_id={sid_val}"
+# 补全相对路径
+action = requests.compat.urljoin(login_page.url, action)
 
     # 3) 提取所有 input 字段
     data = {}

@@ -38,4 +38,4 @@ jobs:
         run: rm -f .last_run
 
       - name: Run auto-renew script
-        run: python main.py
+        run: python euserv_auto_renew.py

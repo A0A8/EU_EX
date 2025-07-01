@@ -1,4 +1,10 @@
-steps:
+name: EUserv Auto-Renew
+
+on:
+  workflow_dispatch: {}      # 手动触发
+  schedule:                  # 定时触发
+    - cron: '0 2 * * *'      # 每天 02:00 UTC
+    steps:
   - name: Checkout repository
     uses: actions/checkout@v4
 

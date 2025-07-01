@@ -27,4 +27,4 @@ jobs:
     - run: |
         pip install --upgrade pip
         pip install ddddocr requests beautifulsoup4 bs4
-    - run: python main.py
+    - run: python euserv_auto_renew.py

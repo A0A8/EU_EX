@@ -1,5 +1,6 @@
 name: EUserv Auto-Renew
 
+# 支持手动触发 & 定时触发（每天 UTC 02:00）
 on:
   workflow_dispatch: {}
   schedule:
@@ -7,9 +8,12 @@ on:
 
 jobs:
   renew:
+    name: Run EUserv Auto-Renew
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -18,7 +22,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install requests beautifulsoup4
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4 ddddocr
 
       - name: Run auto-renew script
         env:
@@ -32,6 +37,8 @@ jobs:
           RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
           YD_EMAIL: ${{ secrets.YD_EMAIL }}
           YD_APP_PWD: ${{ secrets.YD_APP_PWD }}
+          # 如需代理，可在 Secrets 中设置 PROXIES="http://host:port"
           PROXIES: ${{ secrets.PROXIES }}
         run: |
-          python euserv_auto_renew.py
+          chmod +x ./euserv_auto_renew.py
+          python ./euserv_auto_renew.py

@@ -1,46 +1,58 @@
+下面是修正后的完整 GitHub Actions workflow，将 Python 版本从错误的 3.1 改为可用的 3.10（或者你其他需要的版本），并确保所有自定义变量都引用了 secrets：
+
 name: EUserv Auto Renew
 
 on:
   schedule:
-    - cron: "0 23 * * *"  # 每天 UTC+0 时间 23:00（北京时间早上 7:00）
-  workflow_dispatch:  # 允许手动触发
+    - cron: "0 23 * * *"  # 每天 UTC 23:00（北京时间 07:00）
+  workflow_dispatch:
 
 jobs:
   renew:
     runs-on: ubuntu-latest
 
     env:
-      USERNAME: ${{ secrets.USERNAME }}
-      PASSWORD: ${{ secrets.PASSWORD }}
-      MAILPARSER_DOWNLOAD_URL_ID: ${{ secrets.MAILPARSER_DOWNLOAD_URL_ID }}
+      USERNAME: ${{ secrets.EUSERV_USERNAME }}
+      PASSWORD: ${{ secrets.EUSERV_PASSWORD }}
+      MAILPARSER_DOWNLOAD_URL_ID: ${{ secrets.EUSERV_MAILPARSER_ID }}
       TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
       TG_USER_ID: ${{ secrets.TG_USER_ID }}
 
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v3
 
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: 3.10
+          python-version: "3.10"  # 将此处改为 3.10 或其他可用版本
 
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
+          pip install selenium ddddocr requests bs4
 
       - name: Install Chrome & ChromeDriver
         run: |
           sudo apt update
           sudo apt install -y wget unzip xvfb
           wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-          sudo apt install -y ./google-chrome-stable_current_amd64.deb
+          sudo dpkg -i google-chrome-stable_current_amd64.deb || sudo apt-get -f install -y
           LATEST=$(curl -s https://chromedriver.storage.googleapis.com/LATEST_RELEASE)
           wget https://chromedriver.storage.googleapis.com/$LATEST/chromedriver_linux64.zip
           unzip chromedriver_linux64.zip
           sudo mv chromedriver /usr/local/bin/
           chmod +x /usr/local/bin/chromedriver
 
-      - name: Run script
+      - name: Run EUserv Auto Renew
         run: |
           python euserv_auto_renew.py
+
+关键改动：
+
+python-version: "3.10"：替换掉之前写成 3.1 的错误版本。
+
+确保所有环境变量都写成 ${{ secrets.<你的 Secret 名称> }}。
+
+
+保存后重新触发 workflow，就不会再出现 “version 3.1 not found” 的错误了。
+

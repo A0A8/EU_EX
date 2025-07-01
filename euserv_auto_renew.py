@@ -1,30 +1,10 @@
-#!/usr/bin/env python3
-# SPDX-License-IdentifierText: (c) 2020-2021 CokeMine & Its repository contributors
-# SPDX-License-IdentifierText: (c) 2021 A beam of light
-# SPDX-License-Identifier: GPL-3.0-or-later
-
-"""
-EUserv auto-renew script with improved captcha solving logic:
-- 优先使用 ddddocr 识别
-- 失败时 fallback 到 OCR.space
-- 避免 TrueCaptcha 并处理识别异常
-- 20 天调度控制
-"""
-
-import os
-import re
-import time
-import base64
-import requests
-import ddddocr
+import os, re, time, base64, json, requests, ddddocr
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
+from smtplib import SMTP_SSL, SMTPDataError
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from email.mime.application import MIMEApplication
-from smtplib import SMTP_SSL, SMTPDataError
 
-# 环境变量配置
 USERNAME = os.environ.get("USERNAME")
 PASSWORD = os.environ.get("PASSWORD")
 MAILPARSER_DOWNLOAD_URL_ID = os.environ.get("MAILPARSER_DOWNLOAD_URL_ID")
@@ -36,19 +16,14 @@ RECEIVER_EMAIL = os.environ.get("RECEIVER_EMAIL", "")
 YD_EMAIL = os.environ.get("YD_EMAIL", "")
 YD_APP_PWD = os.environ.get("YD_APP_PWD", "")
 OCR_SPACE_API_KEY = os.environ.get("OCR_API_KEY", "")
-
 LOGIN_MAX_RETRY_COUNT = 5
 WAITING_TIME_OF_PIN = 15
 LAST_RUN_FILE = ".last_run"
 user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-
 desp = ""
 ocr_local = ddddocr.DdddOcr()
 
-def log(info: str):
-    global desp
-    print(info)
-    desp += info + "\n"
+def log(info): global desp; print(info); desp += info + "\n"
 
 def should_run():
     now = datetime.utcnow()
@@ -56,121 +31,154 @@ def should_run():
         try:
             with open(LAST_RUN_FILE, "r") as f:
                 last = datetime.fromisoformat(f.read().strip())
-        except Exception:
-            last = now - timedelta(days=21)
-        if now - last < timedelta(days=20):
-            print(f"[Scheduler] 上次运行 {last.isoformat()}，未满20天，跳过。")
-            return False
+            if now - last < timedelta(days=20):
+                print(f"[调度] 上次运行 {last.isoformat()}，未满20天，跳过。")
+                return False
+        except:
+            pass
     with open(LAST_RUN_FILE, "w") as f:
         f.write(now.isoformat())
     return True
 
-def captcha_solver(captcha_image_url: str, session: requests.Session) -> dict:
-    """
-    新的识别逻辑：
-    1. 优先使用 ddddocr，本地识别
-    2. 失败时使用 OCR.space 接口
-    返回格式：{"result": "识别文本"}
-    """
+def captcha_solver(captcha_image_url, session):
+    image_bytes = session.get(captcha_image_url).content
     try:
-        log("[Captcha Solver] 使用 ddddocr 识别...")
-        response = session.get(captcha_image_url, headers={"User-Agent": user_agent})
-        response.raise_for_status()
-        image_bytes = response.content
-        text = ocr_local.classification(image_bytes)
-        if text and text.strip():
-            return {"result": text.strip()}
-        log("[Captcha Solver] ddddocr 未识别到文本")
+        log("[Captcha] 使用 ddddocr...")
+        result = ocr_local.classification(image_bytes)
+        if result.strip():
+            return {"result": result.strip()}
     except Exception as e:
-        log(f"[Captcha Solver] ddddocr 异常: {e}")
-
-    # fallback to OCR.space
+        log(f"[ddddocr] 错误: {e}")
     try:
-        log("[Captcha Solver] 使用 OCR.space 识别...")
+        log("[Captcha] 使用 OCR.space...")
         b64 = base64.b64encode(image_bytes).decode()
         payload = {
             "apikey": OCR_SPACE_API_KEY,
             "language": "eng",
-            "isOverlayRequired": False
+            "isOverlayRequired": False,
+            "base64Image": "data:image/png;base64," + b64,
         }
-        files = {"file": ("captcha.jpg", image_bytes)}
-        r = requests.post("https://api.ocr.space/parse/image", data=payload, files=files)
+        r = requests.post("https://api.ocr.space/parse/image", data=payload)
         r.raise_for_status()
-        parsed = r.json().get("ParsedResults", [{}])[0].get("ParsedText", "").strip()
+        parsed = r.json()["ParsedResults"][0]["ParsedText"].strip()
         return {"result": parsed}
     except Exception as e:
-        log(f"[Captcha Solver] OCR.space 异常: {e}")
+        log(f"[OCR.space] 错误: {e}")
         return {"result": ""}
 
-def handle_captcha_solved_result(solved: dict) -> str:
-    # 仅返回文本即可
-    return solved.get("result", "")
+def handle_captcha_solved_result(solved): return solved.get("result", "")
 
 def login_retry(max_retry=3):
-    def deco(func):
+    def decorator(func):
         def wrapper(username, password):
-            for i in range(max_retry + 1):
+            for i in range(max_retry):
                 sid, sess = func(username, password)
                 if sid != "-1":
                     return sid, sess
-                log(f"[Login] 第{i+1}次尝试失败")
+                log(f"[Login] 第 {i+1} 次失败")
             return "-1", sess
         return wrapper
-    return deco
+    return decorator
 
-@login_retry(max_retry=LOGIN_MAX_RETRY_COUNT)
-def login(username: str, password: str):
-    headers = {"User-Agent": user_agent, "Origin": "https://www.euserv.com"}
-    url = "https://support.euserv.com/index.iphp"
-    captcha_url = "https://support.euserv.com/securimage_show.php"
+@login_retry()
+def login(username, password):
+    headers = {"User-Agent": user_agent}
     session = requests.Session()
-    r = session.get(url, headers=headers); r.raise_for_status()
-    sid = re.search(r'PHPSESSID=(\w+);', str(r.headers)).group(1)
-
-    # 登录请求
+    url = "https://support.euserv.com/index.iphp"
+    sid = re.search(r'PHPSESSID=(\w+);', str(session.get(url, headers=headers).headers)).group(1)
     data = {
-        "email": username,
-        "password": password,
-        "form_selected_language": "en",
-        "Submit": "Login",
-        "subaction": "login",
-        "sess_id": sid
+        "email": username, "password": password, "form_selected_language": "en",
+        "Submit": "Login", "subaction": "login", "sess_id": sid
     }
-    f = session.post(url, headers=headers, data=data); f.raise_for_status()
-    if "Please solve the following captcha" in f.text:
-        log("[Captcha] 开始识别")
-        solved = captcha_solver(captcha_url, session)
+    r = session.post(url, headers=headers, data=data)
+    if "captcha" in r.text:
+        log("[Login] 需要验证码")
+        solved = captcha_solver("https://support.euserv.com/securimage_show.php", session)
         code = handle_captcha_solved_result(solved)
         log(f"[Captcha] 识别结果: {code}")
-        f2 = session.post(url, headers=headers, data={
-            "subaction": "login",
-            "sess_id": sid,
-            "captcha_code": code
+        r2 = session.post(url, headers=headers, data={
+            "subaction": "login", "sess_id": sid, "captcha_code": code
         })
-        if "Please solve the following captcha" not in f2.text:
-            log("[Login] 验证通过")
+        if "captcha" not in r2.text:
             return sid, session
-        log("[Login] 验证失败")
         return "-1", session
-    log("[Login] 登录成功，无需验证码")
     return sid, session
 
-def get_servers(sess_id, session):
-    url = f"https://support.euserv.com/index.iphp?sess_id={sess_id}"
-    r = session.get(url, headers={"User-Agent": user_agent}); r.raise_for_status()
+def get_servers(sid, session):
+    url = f"https://support.euserv.com/index.iphp?sess_id={sid}"
+    r = session.get(url, headers={"User-Agent": user_agent})
     soup = BeautifulSoup(r.text, "html.parser")
     servers = {}
-    for tr in soup.select("#kc2_order_customer_orders_tab_content_1 .kc2_order_table.kc2_content_table tr"):
-        sid_els = tr.select(".td-z1-sp1-kc")
-        if len(sid_els) != 1: continue
-        server_id = sid_els[0].get_text().strip()
-        need_renew = bool(tr.select('input[type="submit"][value="Extend contract"]'))
-        servers[server_id] = need_renew
+    for tr in soup.select("#kc2_order_customer_orders_tab_content_1 tr"):
+        sid_tag = tr.select_one(".td-z1-sp1-kc")
+        if sid_tag:
+            server_id = sid_tag.text.strip()
+            need = bool(tr.select_one("input[value='Extend contract']"))
+            servers[server_id] = need
     return servers
 
-# ... 其余部分保持不变，包括 renew(), get_pin_from_mailparser(), check(), telegram(), email()
+def get_pin(mail_id):
+    r = requests.get(f"{MAILPARSER_DOWNLOAD_URL_ID}{mail_id}")
+    return r.json()[0]["pin"]
+
+def renew(sid, session, pwd, order_id, mail_id):
+    url = "https://support.euserv.com/index.iphp"
+    headers = {"User-Agent": user_agent}
+    session.post(url, headers=headers, data={
+        "Submit": "Extend contract", "sess_id": sid, "ord_no": order_id,
+        "subaction": "choose_order", "choose_order_subaction": "show_contract_details"
+    })
+    session.post(url, headers=headers, data={
+        "sess_id": sid, "subaction": "show_kc2_security_password_dialog",
+        "prefix": "kc2_customer_contract_details_extend_contract_", "type": "1"
+    })
+    time.sleep(WAITING_TIME_OF_PIN)
+    pin = get_pin(mail_id)
+    log(f"[PIN] {pin}")
+    token_req = session.post(url, headers=headers, data={
+        "auth": pin, "sess_id": sid, "subaction": "kc2_security_password_get_token",
+        "prefix": "kc2_customer_contract_details_extend_contract_", "type": 1,
+        "ident": f"kc2_customer_contract_details_extend_contract_{order_id}"
+    }).json()
+    if token_req.get("rs") != "success":
+        return False
+    token = token_req["token"]["value"]
+    session.post(url, headers=headers, data={
+        "sess_id": sid, "ord_id": order_id,
+        "subaction": "kc2_customer_contract_details_extend_contract_term",
+        "token": token
+    })
+    return True
+
+def check(sid, session):
+    failed = [k for k,v in get_servers(sid, session).items() if v]
+    if failed:
+        for f in failed:
+            log(f"[Check] {f} 续期失败")
+    else:
+        log("[Check] 所有续期成功")
+
+def telegram():
+    data = {"chat_id": TG_USER_ID, "text": "EUserv续费日志\n\n"+desp}
+    requests.post(f"{TG_API_HOST}/bot{TG_BOT_TOKEN}/sendMessage", data=data)
+
+def send_mail():
+    msg = MIMEMultipart(); msg["From"]=YD_EMAIL; msg["To"]=RECEIVER_EMAIL
+    msg["Subject"]="EUserv续费日志"; msg.attach(MIMEText(desp,"plain","utf-8"))
+    s = SMTP_SSL("smtp.yandex.ru",465); s.login(YD_EMAIL,YD_APP_PWD)
+    s.sendmail(YD_EMAIL,RECEIVER_EMAIL,msg.as_string()); s.quit()
 
 if __name__ == "__main__":
     if not should_run(): exit(0)
-    # 省略配置校验、循环逻辑
-    log("[Main] 脚本已更新，可继续整合剩余流程")
+    users = USERNAME.split(); pwds = PASSWORD.split(); mails = MAILPARSER_DOWNLOAD_URL_ID.split()
+    if not (len(users)==len(pwds)==len(mails)): print("[配置] 数量不一致"); exit(1)
+    for i,(u,p,m) in enumerate(zip(users,pwds,mails),1):
+        log(f"[账户] 第{i}个: {u}")
+        sid,sess=login(u,p)
+        if sid=="-1": continue
+        for sid2,need in get_servers(sid,sess).items():
+            if need: log(f"[续期] {sid2} {'成功' if renew(sid,sess,p,sid2,m) else '失败'}")
+            else: log(f"[跳过] {sid2}")
+        check(sid,sess)
+    if TG_BOT_TOKEN and TG_USER_ID: telegram()
+    if YD_EMAIL and RECEIVER_EMAIL and YD_APP_PWD: send_mail()

@@ -1,51 +1,30 @@
-# .github/workflows/auto_renew.yml
-name: EUserv Auto-Renew
+steps:
+  - name: Checkout repository
+    uses: actions/checkout@v4
 
-# 触发条件：手动触发和每日定时执行
-on:
-  workflow_dispatch: {}
-  schedule:
-    # 每天 02:00 UTC（对应北京时间 10:00；欧洲/阿姆斯特丹 UTC+2 则为 04:00）运行一次
-    - cron: '0 2 * * *'
+  - name: Set up Python
+    uses: actions/setup-python@v4
+    with:
+      python-version: '3.10'
 
-jobs:
-  renew:
-    name: Run EUserv Auto-Renew
-    runs-on: ubuntu-latest
+  - name: Install dependencies
+    run: |
+      python -m pip install --upgrade pip
+      pip install requests beautifulsoup4
 
-    steps:
-      # 1. 签出仓库
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      # 2. 安装 Python 环境
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-
-      # 3. 安装依赖
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install requests beautifulsoup4 bs4
-
-      # 4. 运行自动续费脚本
-      - name: Run auto-renew script
-        env:
-          USERNAME: ${{ secrets.USERNAME }}
-          PASSWORD: ${{ secrets.PASSWORD }}
-          OCRSPACE_API_KEY: ${{ secrets.OCR_API_KEY }}
-          MAILPARSER_DOWNLOAD_URL_ID: ${{ secrets.MAILPARSER_DOWNLOAD_URL_ID }}
-          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_USER_ID: ${{ secrets.TG_USER_ID }}
-          TG_API_HOST: ${{ secrets.TG_API_HOST }}
-          RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
-          YD_EMAIL: ${{ secrets.YD_EMAIL }}
-          YD_APP_PWD: ${{ secrets.YD_APP_PWD }}
-          # 如果使用代理，请在 Secrets 中配置 PROXIES，否则留空
-          PROXIES: ${{ secrets.PROXIES }}
-        run: |
-          chmod +x ./euserv_auto_renew.py
-          python ./euserv_auto_renew.py
-
+  - name: Run auto-renew script
+    env:
+      USERNAME: ${{ secrets.USERNAME }}
+      PASSWORD: ${{ secrets.PASSWORD }}
+      OCRSPACE_API_KEY: ${{ secrets.OCR_API_KEY }}
+      MAILPARSER_DOWNLOAD_URL_ID: ${{ secrets.MAILPARSER_DOWNLOAD_URL_ID }}
+      TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+      TG_USER_ID: ${{ secrets.TG_USER_ID }}
+      TG_API_HOST: ${{ secrets.TG_API_HOST }}
+      RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+      YD_EMAIL: ${{ secrets.YD_EMAIL }}
+      YD_APP_PWD: ${{ secrets.YD_APP_PWD }}
+      PROXIES: ${{ secrets.PROXIES }}
+    run: |
+      chmod +x ./euserv_auto_renew.py
+      python ./euserv_auto_renew.py

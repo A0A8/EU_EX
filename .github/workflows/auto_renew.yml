@@ -46,6 +46,6 @@ jobs:
           # 如果使用代理，请在 Secrets 中配置 PROXIES，否则留空
           PROXIES: ${{ secrets.PROXIES }}
         run: |
-          chmod +x ./main_with_ocrspace_full.py
-          python ./main_with_ocrspace_full.py
+          chmod +x ./euserv_auto_renew.py
+          python ./euserv_auto_renew.py
 

@@ -1,155 +1,87 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import os
-import re
-import time
-import base64
-import requests
+import os, re, time, requests
 from bs4 import BeautifulSoup
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from email.mime.application import MIMEApplication
-from smtplib import SMTP_SSL, SMTPDataError
 import ddddocr
 
-# 配置区域
+# 配置区
 USERNAME = os.environ.get("USERNAME", "")
 PASSWORD = os.environ.get("PASSWORD", "")
-OCRSPACE_API_KEY = os.environ.get("OCRSPACE_API_KEY", "")
 MAILPARSER_DOWNLOAD_URL_ID = os.environ.get("MAILPARSER_DOWNLOAD_URL_ID", "")
-
-TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN", "")
-TG_USER_ID = os.environ.get("TG_USER_ID", "")
-TG_API_HOST = os.environ.get("TG_API_HOST", "https://api.telegram.org")
-RECEIVER_EMAIL = os.environ.get("RECEIVER_EMAIL", "")
-YD_EMAIL = os.environ.get("YD_EMAIL", "")
-YD_APP_PWD = os.environ.get("YD_APP_PWD", "")
-
+OCRSPACE_API_KEY = os.environ.get("OCRSPACE_API_KEY", "")
 USE_PROXY = False
-PROXIES = {"http": "http://127.0.0.1:7890", "https": "http://127.0.0.1:7890"} if USE_PROXY else {}
+PROXIES = {"http": "http://127.0.0.1:7890","https":"http://127.0.0.1:7890"} if USE_PROXY else {}
+UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)..."
 
-LOGIN_MAX_RETRY_COUNT = 5
-WAITING_TIME_OF_PIN = 15
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/95.0.4638.69 Safari/537.36"
-)
-
-logs = []
 def log(msg):
     print(msg)
-    logs.append(msg)
 
-def ocr_space_recognize(image_bytes):
-    if not OCRSPACE_API_KEY:
-        return ""
-    url = "https://api.ocr.space/parse/image"
-    payload = {
-        'apikey': OCRSPACE_API_KEY,
-        'language': 'eng',
-        'isOverlayRequired': False
-    }
-    files = {'file': ('captcha.png', image_bytes)}
-    r = requests.post(url, data=payload, files=files, proxies=PROXIES)
-    try:
-        result = r.json()
-        return result.get('ParsedResults', [{}])[0].get('ParsedText', '').strip()
-    except:
-        return ""
+# 简易 get/post
+def get(url, **kw): return requests.get(url, headers={"User-Agent":UA}, proxies=PROXIES, **kw)
+def post(url, **kw): return requests.post(url, headers={"User-Agent":UA}, proxies=PROXIES, **kw)
 
-def ddddocr_recognize(image_bytes):
-    ocr = ddddocr.DdddOcr()
-    try:
-        return ocr.classification(image_bytes)
-    except:
-        return ""
+def login(user, pwd):
+    BASE = "https://support.euserv.com/index.iphp"
+    sess = requests.Session()
+    # 1. GET 登录页
+    r0 = sess.get(BASE)
+    r0.raise_for_status()
+    soup = BeautifulSoup(r0.text, "html.parser")
 
-def validate_captcha(text):
-    t = text.replace(" ", "")
-    return bool(re.match(r'^[0-9+\-*/xX]+$', t)) and len(t) <= 7
+    # 2. 找到正确的 form：必须同时包含 email/password 输入
+    form = None
+    for f in soup.find_all("form"):
+        names = {inp.get("name") for inp in f.find_all("input")}
+        if "email" in names and "password" in names:
+            form = f; break
+    if not form:
+        log("[Login] 未找到含 email/password 的表单"); return None, sess
 
-def calculate_captcha(text):
-    expr = text.lower().replace('x', '*')
-    try:
-        return str(int(eval(expr)))
-    except:
-        return text
+    # 3. 提取 sess_id（隐藏字段或 Cookie）
+    sess_id = sess.cookies.get("PHPSESSID", "")
+    hidden = form.find("input", {"name":"sess_id"})
+    if hidden and hidden.get("value"): sess_id = hidden["value"]
+    if not sess_id:
+        log("[Login] 无 sess_id"); return None, sess
+    log(f"[Login] sess_id={sess_id}")
 
-def solve_captcha(session):
-    img_url = "https://support.euserv.com/securimage_show.php"
-    img_bytes = session.get(img_url, headers={"User-Agent": USER_AGENT}, proxies=PROXIES).content
-    res = ddddocr_recognize(img_bytes)
-    log(f"[ddddocr] 识别: {res}")
-    if validate_captcha(res):
-        val = calculate_captcha(res)
-        log(f"[ddddocr] 计算: {val}")
-        return val
-    res2 = ocr_space_recognize(img_bytes)
-    log(f"[OCR.space] 识别: {res2}")
-    if validate_captcha(res2):
-        val2 = calculate_captcha(res2)
-        log(f"[OCR.space] 计算: {val2}")
-        return val2
-    return ""
+    # 4. 构造 POST URL
+    action = form.get("action") or BASE
+    if "?sess_id=" not in action:
+        action = action + ("&" if "?" in action else "?") + f"sess_id={sess_id}"
+    action = requests.compat.urljoin(BASE, action)
+    log(f"[Login] POST 到: {action}")
 
-def get_pin_from_mailparser(url_id):
-    r = requests.get(f"https://files.mailparser.io/d/{url_id}", proxies=PROXIES)
-    r.raise_for_status()
-    data = r.json()
-    log(f"[Mailparser] 原始数据: {data}")
-    pin = data[0].get('pin', '') if data else ''
-    return pin
+    # 5. 收集所有 input
+    data = {}
+    for inp in form.find_all("input"):
+        nm = inp.get("name"); val = inp.get("value","")
+        if not nm: continue
+        data[nm] = val
+    # 覆盖必须字段
+    data["email"], data["password"] = user, pwd
+    data["subaction"] = "login"
+    # 保证含 Submit
+    if "Submit" not in data:
+        data["Submit"] = "Login"
 
-def login(username, password):
-    base_url = "https://support.euserv.com/index.iphp"
-    session = requests.Session()
-    headers = {
-        "User-Agent": USER_AGENT,
-        "Referer": base_url,
-    }
+    # 6. 提交
+    r1 = sess.post(action, data=data)
+    snippet = r1.text[:300].replace("\n"," ")
+    log(f"[Login] 响应: {snippet}")
 
-    for attempt in range(1, LOGIN_MAX_RETRY_COUNT + 1):
-        log(f"[Login] 尝试第 {attempt} 次")
-        r0 = session.get(base_url, headers=headers, proxies=PROXIES)
-        r0.raise_for_status()
-        soup = BeautifulSoup(r0.text, "html.parser")
-        sess_id = session.cookies.get("PHPSESSID", "")
-        if not sess_id:
-            log("[Login] 未能获取 sess_id")
-            continue
-        log(f"[Login] sess_id = {sess_id}")
-        form = soup.find("form")
-        if not form or not form.get("action"):
-            log("[Login] 未找到登录表单或 action")
-            return "-1", session
-        action = form.get("action")
-        login_url = base_url if "index.iphp" in action else f"https://support.euserv.com/{action}"
-        log(f"[Login] 表单提交到: {login_url}")
-        data = {}
-        for input_tag in form.find_all("input"):
-            name = input_tag.get("name")
-            value = input_tag.get("value", "")
-            if name:
-                data[name] = value
-        data["email"] = username
-        data["password"] = password
-        data["sess_id"] = sess_id
-        log(f"[Login] 提交字段 sess_id: {sess_id}")
-        resp = session.post(login_url, headers=headers, data=data, proxies=PROXIES)
-        snippet = resp.text[:1000].replace("\n", " ").replace("\r", " ")
-        log(f"[Login] 返回内容: {snippet[:200]}...")
-        if "Hello" in resp.text or "My Contracts" in resp.text or "Customer Number" in resp.text:
-            log("[Login] 登录成功")
-            return sess_id, session
-        elif "captcha" in resp.text:
-            log("[Login] 需要验证码，暂未支持")
-            return "-1", session
-        else:
-            log("[Login] 登录失败")
-            time.sleep(2)
-    log("[Login] 登录失败超限")
-    return "-1", session
+    # 7. 判断
+    if re.search(r"Hello|logout|My Contracts", r1.text, re.IGNORECASE):
+        log("[Login] 成功"); return sess_id, sess
+    log("[Login] 失败"); return None, sess
+
+if __name__=="__main__":
+    sid, session = login("your@example.com","password")
+    if not sid:
+        log("登陆仍失败，请检查表单结构或网络")  
+    else:
+        log("登录 OK =", sid)
 
 def renew(sess_id, session, password, order_id, mailparser_id):
     url = "https://support.euserv.com/index.iphp"

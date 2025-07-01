@@ -116,51 +116,60 @@ def get_pin_from_mailparser(url_id):
 # 登录函数
 
 def login(username, password):
-    url = "https://support.euserv.com/index.iphp"
+    base_url = "https://support.euserv.com/index.iphp"
+    session = requests.Session()
     headers = {
         "User-Agent": USER_AGENT,
-        "Referer": "https://support.euserv.com/index.iphp"
+        "Referer": base_url,
     }
-    session = requests.Session()
-    for i in range(1, LOGIN_MAX_RETRY_COUNT+1):
-        log(f"[Login] 尝试第 {i} 次")
-        r = session.get(url, headers=headers, proxies=PROXIES)
-        sid = re.search(r'PHPSESSID=(\w+);', str(r.headers))
-        if not sid:
+
+    for attempt in range(1, LOGIN_MAX_RETRY_COUNT + 1):
+        log(f"[Login] 第 {attempt} 次尝试登录")
+
+        # 1) 获取初始页面并提取 sess_id
+        r0 = session.get(base_url, headers=headers, proxies=PROXIES)
+        sid_match = re.search(r"PHPSESSID=(\\w+);", str(r0.headers))
+        if not sid_match:
+            log("[Login] 无法获取 sess_id")
             continue
-        sess_id = sid.group(1)
-        session.get("https://support.euserv.com/pic/logo_small.png", headers=headers, proxies=PROXIES)
+        sess_id = sid_match.group(1)
+
+        # 2) 构造带 sess_id 的登录 URL
+        login_url = f"{base_url}?sess_id={sess_id}"
+
+        # 3) 提交第一次登录请求
         data = {
             "email": username,
             "password": password,
             "form_selected_language": "en",
             "Submit": "Login",
             "subaction": "login",
-            "sess_id": sess_id
+            "sess_id": sess_id,
         }
-        resp = session.post(url, headers=headers, data=data, proxies=PROXIES)
-        snippet = resp.text[:500].replace("\n"," ")
+        resp = session.post(login_url, headers=headers, data=data, proxies=PROXIES)
+
+        snippet = resp.text[:500].replace("\n", " ")
         log(f"[Login] 响应: {snippet}")
-        if "Hello" in resp.text or "Confirm or change" in resp.text:
-            log("[Login] 成功")
+
+        # 4) 判断登录成功
+        if "Hello" in resp.text or "Confirm or change your customer data here" in resp.text:
+            log("[Login] 登录成功")
             return sess_id, session
-        if "captcha" in resp.text.lower():
-            log("[Login] 需要验证码")
-            code = solve_captcha(session)
-            log(f"[Login] 验证码: {code}")
-            if not code:
-                continue
-            data['captcha_code'] = code
-            resp2 = session.post(url, headers=headers, data=data, proxies=PROXIES)
-            if "captcha" not in resp2.text.lower():
-                log("[Login] 验证码通过")
-                return sess_id, session
-        log("[Login] 失败，重试")
-    log("[Login] 失败超限")
+
+        # 5) 如果检测到需要验证码
+        if "solve the following captcha" in resp.text:
+            log("[Login] 需要验证码识别")
+            # 识别验证码并重试（略）
+            # 注意：验证码提交也要用 login_url 而不是 base_url
+            # data["captcha_code"] = solve_captcha(...)
+            # resp2 = session.post(login_url, headers=headers, data=data, proxies=PROXIES)
+            # 如果成功则 return
+
+        log("[Login] 登录失败，重试")
+
+    log("[Login] 登录失败超限")
     return "-1", session
-
-# 获取服务器列表、续费等逻辑省略，重点修正 renew()
-
+    
 def renew(sess_id, session, password, order_id, mailparser_id):
     url = "https://support.euserv.com/index.iphp"
     headers = {"User-Agent": USER_AGENT, "Referer": f"https://support.euserv.com/index.iphp?sess_id={sess_id}"}

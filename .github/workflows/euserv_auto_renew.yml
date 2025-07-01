@@ -1,0 +1,40 @@
+name: EUserv Auto Renew
+
+on:
+  schedule:
+    # 每日 UTC 00:00（GMT+8 08:00）触发，由脚本控制每 20 天执行一次
+    - cron: '0 0 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  renew:
+    runs-on: ubuntu-latest
+    env:
+      USERNAME: ${{ secrets.USERNAME }}
+      PASSWORD: ${{ secrets.PASSWORD }}
+      MAILPARSER_DOWNLOAD_URL_ID: ${{ secrets.MAILPARSER_DOWNLOAD_URL_ID }}
+      OCR_API_KEY: ${{ secrets.OCR_API_KEY }}
+      TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+      TG_USER_ID: ${{ secrets.TG_USER_ID }}
+      TG_API_HOST: ${{ secrets.TG_API_HOST }}
+      RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+      YD_EMAIL: ${{ secrets.YD_EMAIL }}
+      YD_APP_PWD: ${{ secrets.YD_APP_PWD }}
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install ddddocr requests beautifulsoup4
+
+    - name: Run EUserv auto-renew script (every 20 days logic)
+      run: |
+        python euserv_auto_renew.py

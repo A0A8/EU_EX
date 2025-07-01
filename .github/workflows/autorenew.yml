@@ -19,11 +19,11 @@ jobs:
           pip install -r requirements.txt
       - name: Run Script
         env:
-          EUSERV_USERNAME: ${{ secrets.EUSERV_USERNAME }}
-          EUSERV_PASSWORD: ${{ secrets.EUSERV_PASSWORD }}
+          EUSERV_USERNAME: ${{ secrets.USERNAME }}
+          EUSERV_PASSWORD: ${{ secrets.PASSWORD }}
           TRUECAPTCHA_USERID: ${{ secrets.TRUECAPTCHA_USERID }}
           TRUECAPTCHA_APIKEY: ${{ secrets.TRUECAPTCHA_APIKEY }}
-          OCR_SPACE_APIKEY: ${{ secrets.OCR_SPACE_APIKEY }}
+          OCR_SPACE_APIKEY: ${{ secrets.OCR_APIKEY }}
           MAILPARSER_DOWNLOAD_URL_ID: ${{ secrets.MAILPARSER_DOWNLOAD_URL_ID }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_USER_ID: ${{ secrets.TG_USER_ID }}

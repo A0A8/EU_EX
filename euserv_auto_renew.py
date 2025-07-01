@@ -181,9 +181,7 @@ def check(sess_id, session):
     if all_ok: log("[EUserv] 全部续费完成！")
 
 def telegram():
-    data = (("chat_id", TG_USER_ID), ("text", "EUserv 日志
-
-" + desp))
+    data = (("chat_id", TG_USER_ID), ("text", "EUserv 日志\n\n" + desp))
     response = requests.post(
         f"{TG_API_HOST}/bot{TG_BOT_TOKEN}/sendMessage",
         data=data

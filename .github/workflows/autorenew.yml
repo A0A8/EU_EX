@@ -1,0 +1,31 @@
+name: Auto Renew EUserv VPS
+
+on:
+  schedule:
+    - cron: '30 23 * * *'
+  workflow_dispatch:
+
+jobs:
+  autorenew:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Run Script
+        env:
+          EUSERV_USERNAME: ${{ secrets.EUSERV_USERNAME }}
+          EUSERV_PASSWORD: ${{ secrets.EUSERV_PASSWORD }}
+          TRUECAPTCHA_USERID: ${{ secrets.TRUECAPTCHA_USERID }}
+          TRUECAPTCHA_APIKEY: ${{ secrets.TRUECAPTCHA_APIKEY }}
+          OCR_SPACE_APIKEY: ${{ secrets.OCR_SPACE_APIKEY }}
+          MAILPARSER_DOWNLOAD_URL_ID: ${{ secrets.MAILPARSER_DOWNLOAD_URL_ID }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_USER_ID: ${{ secrets.TG_USER_ID }}
+          OCR_PROVIDER: ${{ secrets.OCR_PROVIDER }}
+        run: python euserv_autorenew.py

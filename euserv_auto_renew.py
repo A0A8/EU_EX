@@ -194,7 +194,6 @@ def get_servers(sess_id, session):
         servers[server_id] = renew_flag
     return servers
 
-de
 def renew(sess_id: str, session: requests.Session, password: str, order_id: str, mailparser_dl_url_id: str) -> bool:
     url = "https://support.euserv.com/index.iphp"
     headers = {

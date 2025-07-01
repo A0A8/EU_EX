@@ -23,7 +23,10 @@ user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 desp = ""
 ocr_local = ddddocr.DdddOcr()
 
-def log(info): global desp; print(info); desp += info + "\n"
+def log(info): 
+    global desp; 
+    print(info); 
+    desp += info + "\n"
 
 def should_run():
     now = datetime.utcnow()
@@ -45,7 +48,7 @@ def captcha_solver(captcha_image_url, session):
     try:
         log("[Captcha] 使用 ddddocr...")
         result = ocr_local.classification(image_bytes)
-        if result.strip():
+        if result.strip(): 
             return {"result": result.strip()}
     except Exception as e:
         log(f"[ddddocr] 错误: {e}")
@@ -99,7 +102,7 @@ def login(username, password):
         r2 = session.post(url, headers=headers, data={
             "subaction": "login", "sess_id": sid, "captcha_code": code
         })
-        if "captcha" not in r2.text:
+        if "captcha" not in r2.text: 
             return sid, session
         return "-1", session
     return sid, session
@@ -159,7 +162,9 @@ def check(sid, session):
         log("[Check] 所有续期成功")
 
 def telegram():
-    data = {"chat_id": TG_USER_ID, "text": "EUserv续费日志\n\n"+desp}
+    data = {"chat_id": TG_USER_ID, "text": "EUserv续费日志
+
+"+desp}
     requests.post(f"{TG_API_HOST}/bot{TG_BOT_TOKEN}/sendMessage", data=data)
 
 def send_mail():
@@ -167,18 +172,3 @@ def send_mail():
     msg["Subject"]="EUserv续费日志"; msg.attach(MIMEText(desp,"plain","utf-8"))
     s = SMTP_SSL("smtp.yandex.ru",465); s.login(YD_EMAIL,YD_APP_PWD)
     s.sendmail(YD_EMAIL,RECEIVER_EMAIL,msg.as_string()); s.quit()
-
-if __name__ == "__main__":
-    if not should_run(): exit(0)
-    users = USERNAME.split(); pwds = PASSWORD.split(); mails = MAILPARSER_DOWNLOAD_URL_ID.split()
-    if not (len(users)==len(pwds)==len(mails)): print("[配置] 数量不一致"); exit(1)
-    for i,(u,p,m) in enumerate(zip(users,pwds,mails),1):
-        log(f"[账户] 第{i}个: {u}")
-        sid,sess=login(u,p)
-        if sid=="-1": continue
-        for sid2,need in get_servers(sid,sess).items():
-            if need: log(f"[续期] {sid2} {'成功' if renew(sid,sess,p,sid2,m) else '失败'}")
-            else: log(f"[跳过] {sid2}")
-        check(sid,sess)
-    if TG_BOT_TOKEN and TG_USER_ID: telegram()
-    if YD_EMAIL and RECEIVER_EMAIL and YD_APP_PWD: send_mail()

@@ -117,56 +117,50 @@ def get_pin_from_mailparser(url_id):
 
 def login(username, password):
     """
-    返回 (sess_id, session) 或 (None, session) 登录失败
+    自动从登录页抓取表单action和所有input字段，提交表单登录
     """
-    base = "https://support.euserv.com/index.iphp"
     session = requests.Session()
+    # 1) GET 登录页
+    login_page = session.get("https://support.euserv.com/index.iphp", headers={"User-Agent": USER_AGENT}, proxies=PROXIES)
+    soup = BeautifulSoup(login_page.text, "html.parser")
 
-    # 1) GET 起始页面
-    resp0 = session.get(base, headers={"User-Agent": USER_AGENT}, proxies=PROXIES)
-    soup0 = BeautifulSoup(resp0.text, "html.parser")
-
-    # 获取 sess_id
-    inp = soup0.find("input", {"name": "sess_id"})
-    if not inp:
-        log("[Login] 未找到 sess_id 输入框")
+    # 2) 找到登录表单
+    form = soup.find("form", {"name": "login"}) or soup.find("form", {"id": "login"}) or soup.find("form")
+    if not form or not form.get("action"):
+        log("[Login] 未找到登录表单或 action")
         return None, session
-    sess_id = inp["value"]
-    login_url = f"{base}?sess_id={sess_id}"
-    log(f"[Login] sess_id = {sess_id}")
 
-    # 获取可能存在的 formhash
-    formhash = ""
-    fh = soup0.find("input", {"name": "formhash"})
-    if fh and fh.get("value"):
-        formhash = fh["value"]
-        log(f"[Login] formhash = {formhash}")
+    action = form["action"]
+    # 如果 action 不是完整 URL，就补齐
+    if not action.startswith("http"):
+        action = requests.compat.urljoin(login_page.url, action)
 
-    # 2) POST 登录
-    data = {
-        "email": username,
-        "password": password,
-        "form_selected_language": "en",
-        "Submit": "Login",
-        "subaction": "login",
-        "sess_id": sess_id,
-    }
-    if formhash:
-        data["formhash"] = formhash
+    # 3) 提取所有 input 字段
+    data = {}
+    for inp in form.find_all("input"):
+        name = inp.get("name")
+        if not name:
+            continue
+        # 默认取 value，有的字段留空
+        data[name] = inp.get("value", "")
 
-    headers = {
-        "User-Agent": USER_AGENT,
-        "Referer": login_url,
-    }
+    # 4) 覆盖用户名和密码
+    data["email"] = username
+    data["password"] = password
+    data["subaction"] = "login"  # 确保登录动作
 
-    resp1 = session.post(login_url, headers=headers, data=data, proxies=PROXIES)
-    snippet = resp1.text[:500].replace("\n", " ")
-    log(f"[Login] 登录返回: {snippet}")
+    log(f"[Login] 表单提交到 {action}")
+    log(f"[Login] 表单数据示例：{ {k: data[k] for k in ('email','password','sess_id') if k in data} }")
 
-    # 3) 判断是否登录成功
-    if "logout" in resp1.text.lower() or "hello" in resp1.text.lower():
+    # 5) POST 登录
+    resp = session.post(action, headers={"User-Agent": USER_AGENT, "Referer": login_page.url}, data=data, proxies=PROXIES)
+    snippet = resp.text[:500].replace("\n", " ")
+    log(f"[Login] 返回内容：{snippet}")
+
+    # 6) 判断登录
+    if "Hello" in resp.text or "logout" in resp.text.lower():
         log("[Login] 登录成功")
-        return sess_id, session
+        return session.cookies.get("PHPSESSID"), session
     else:
         log("[Login] 登录失败")
         return None, session

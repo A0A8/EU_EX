@@ -181,11 +181,17 @@ def check(sess_id, session):
     if all_ok: log("[EUserv] 全部续费完成！")
 
 def telegram():
-    data = (("chat_id",TG_USER_ID),("text","EUserv 日志
+    data = (("chat_id", TG_USER_ID), ("text", "EUserv 日志
 
-"+desp))
-    r = requests.post(f"{TG_API_HOST}/bot{TG_BOT_TOKEN}/sendMessage", data=data)
-    print("Telegram 推送成功" if r.status_code==200 else "Telegram 推送失败")
+" + desp))
+    response = requests.post(
+        f"{TG_API_HOST}/bot{TG_BOT_TOKEN}/sendMessage",
+        data=data
+    )
+    if response.status_code != 200:
+        print("Telegram 推送失败")
+    else:
+        print("Telegram 推送成功")
 
 def send_mail_by_yandex(to_email, from_email, subject, text, files, sender_email, sender_password):
     msg = MIMEMultipart(); msg["Subject"]=subject; msg["From"]=from_email; msg["To"]=to_email

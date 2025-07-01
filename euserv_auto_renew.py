@@ -29,7 +29,6 @@ YD_APP_PWD = os.environ.get("YD_APP_PWD", "")
 USE_PROXY = False
 PROXIES = {"http": "http://127.0.0.1:7890", "https": "http://127.0.0.1:7890"} if USE_PROXY else {}
 
-# 常量
 LOGIN_MAX_RETRY_COUNT = 5
 WAITING_TIME_OF_PIN = 15
 USER_AGENT = (
@@ -37,13 +36,10 @@ USER_AGENT = (
     "(KHTML, like Gecko) Chrome/95.0.4638.69 Safari/537.36"
 )
 
-# 日志收集
 logs = []
 def log(msg):
     print(msg)
     logs.append(msg)
-
-# OCR 识别
 
 def ocr_space_recognize(image_bytes):
     if not OCRSPACE_API_KEY:
@@ -62,7 +58,6 @@ def ocr_space_recognize(image_bytes):
     except:
         return ""
 
-
 def ddddocr_recognize(image_bytes):
     ocr = ddddocr.DdddOcr()
     try:
@@ -70,11 +65,9 @@ def ddddocr_recognize(image_bytes):
     except:
         return ""
 
-
 def validate_captcha(text):
     t = text.replace(" ", "")
     return bool(re.match(r'^[0-9+\-*/xX]+$', t)) and len(t) <= 7
-
 
 def calculate_captcha(text):
     expr = text.lower().replace('x', '*')
@@ -83,18 +76,15 @@ def calculate_captcha(text):
     except:
         return text
 
-
 def solve_captcha(session):
     img_url = "https://support.euserv.com/securimage_show.php"
     img_bytes = session.get(img_url, headers={"User-Agent": USER_AGENT}, proxies=PROXIES).content
-    # ddddocr
     res = ddddocr_recognize(img_bytes)
     log(f"[ddddocr] 识别: {res}")
     if validate_captcha(res):
         val = calculate_captcha(res)
         log(f"[ddddocr] 计算: {val}")
         return val
-    # ocr.space
     res2 = ocr_space_recognize(img_bytes)
     log(f"[OCR.space] 识别: {res2}")
     if validate_captcha(res2):
@@ -102,8 +92,6 @@ def solve_captcha(session):
         log(f"[OCR.space] 计算: {val2}")
         return val2
     return ""
-
-# Mailparser PIN 获取
 
 def get_pin_from_mailparser(url_id):
     r = requests.get(f"https://files.mailparser.io/d/{url_id}", proxies=PROXIES)
@@ -113,68 +101,59 @@ def get_pin_from_mailparser(url_id):
     pin = data[0].get('pin', '') if data else ''
     return pin
 
-# 登录函数
-
 def login(username, password):
-    """
-    自动抓取表单并登录，保留所有隐藏字段，POST 到 action URL
-    """
+    base_url = "https://support.euserv.com/index.iphp"
     session = requests.Session()
-    login_page = session.get("https://support.euserv.com/index.iphp", headers={"User-Agent": USER_AGENT}, proxies=PROXIES)
-    soup = BeautifulSoup(login_page.text, "html.parser")
-
-    # 找到表单
-    form = soup.find("form")
-    if not form or not form.get("action"):
-        log("[Login] 未找到登录表单或 action 属性")
-        return None, session
-
-    action = form["action"]
-    # 如果 action 没有 sess_id，就补上
-    if "?sess_id=" not in action:
-        inp_sid = form.find("input", {"name": "sess_id"})
-        if inp_sid and inp_sid.get("value"):
-            action = f"{action}?sess_id={inp_sid['value']}"
-
-    # 补全相对路径
-    action = requests.compat.urljoin(login_page.url, action)
-    log(f"[Login] 表单提交到: {action}")
-
-    # 收集表单所有字段
-    data = {}
-    for inp in form.find_all("input"):
-        name = inp.get("name")
-        if not name:
-            continue
-        data[name] = inp.get("value", "")
-
-    # 覆盖用户名和密码
-    data["email"] = username
-    data["password"] = password
-    data["subaction"] = "login"
-
-    # 打印关键字段以供调试
-    log(f"[Login] 提交字段 sess_id: {data.get('sess_id')}")
-
     headers = {
         "User-Agent": USER_AGENT,
-        "Referer": login_page.url,
+        "Referer": base_url,
     }
-    resp = session.post(action, headers=headers, data=data, proxies=PROXIES)
-    snippet = resp.text[:500].replace("\n", " ")
-    log(f"[Login] 返回内容: {snippet}")
 
-    if "Hello" in resp.text or "logout" in resp.text.lower():
-        log("[Login] 登录成功")
-        return session.cookies.get("PHPSESSID"), session
-    else:
-        log("[Login] 登录失败")
-        return None, session
-        
+    for attempt in range(1, LOGIN_MAX_RETRY_COUNT + 1):
+        log(f"[Login] 尝试第 {attempt} 次")
+        r0 = session.get(base_url, headers=headers, proxies=PROXIES)
+        r0.raise_for_status()
+        soup = BeautifulSoup(r0.text, "html.parser")
+        sess_id = session.cookies.get("PHPSESSID", "")
+        if not sess_id:
+            log("[Login] 未能获取 sess_id")
+            continue
+        log(f"[Login] sess_id = {sess_id}")
+        form = soup.find("form")
+        if not form or not form.get("action"):
+            log("[Login] 未找到登录表单或 action")
+            return "-1", session
+        action = form.get("action")
+        login_url = base_url if "index.iphp" in action else f"https://support.euserv.com/{action}"
+        log(f"[Login] 表单提交到: {login_url}")
+        data = {}
+        for input_tag in form.find_all("input"):
+            name = input_tag.get("name")
+            value = input_tag.get("value", "")
+            if name:
+                data[name] = value
+        data["email"] = username
+        data["password"] = password
+        data["sess_id"] = sess_id
+        log(f"[Login] 提交字段 sess_id: {sess_id}")
+        resp = session.post(login_url, headers=headers, data=data, proxies=PROXIES)
+        snippet = resp.text[:1000].replace("\n", " ").replace("\r", " ")
+        log(f"[Login] 返回内容: {snippet[:200]}...")
+        if "Hello" in resp.text or "My Contracts" in resp.text or "Customer Number" in resp.text:
+            log("[Login] 登录成功")
+            return sess_id, session
+        elif "captcha" in resp.text:
+            log("[Login] 需要验证码，暂未支持")
+            return "-1", session
+        else:
+            log("[Login] 登录失败")
+            time.sleep(2)
+    log("[Login] 登录失败超限")
+    return "-1", session
+
 def renew(sess_id, session, password, order_id, mailparser_id):
     url = "https://support.euserv.com/index.iphp"
     headers = {"User-Agent": USER_AGENT, "Referer": f"https://support.euserv.com/index.iphp?sess_id={sess_id}"}
-    # 1) 选择订单
     session.post(url, headers=headers, data={
         "Submit": "Extend contract",
         "sess_id": sess_id,
@@ -182,7 +161,6 @@ def renew(sess_id, session, password, order_id, mailparser_id):
         "subaction": "choose_order",
         "choose_order_subaction": "show_contract_details"
     }, proxies=PROXIES)
-    # 2) 弹窗 & 重新发送 PIN
     prefix = f"kc2_customer_contract_details_extend_contract_{order_id}"
     session.post(url, headers=headers, data={
         "sess_id": sess_id,
@@ -195,7 +173,6 @@ def renew(sess_id, session, password, order_id, mailparser_id):
         "subaction": "kc2_security_password_send_pin",
         "ident": prefix
     }, proxies=PROXIES)
-    # 3) 获取 PIN
     pin = ''
     for i in range(5):
         time.sleep(WAITING_TIME_OF_PIN)
@@ -206,7 +183,6 @@ def renew(sess_id, session, password, order_id, mailparser_id):
     if not re.match(r'^\d{6}$', pin):
         log("[Renew] PIN 无效")
         return False
-    # 4) 换 token
     rtok = session.post(url, headers=headers, data={
         "auth": pin,
         "sess_id": sess_id,
@@ -216,12 +192,15 @@ def renew(sess_id, session, password, order_id, mailparser_id):
         "ident": prefix
     }, proxies=PROXIES)
     rtok.raise_for_status()
-    tokj = rtok.json()
-    token = tokj.get('token', {}).get('value', '')
-    if not token:
-        log(f"[Renew] token 失败: {rtok.text[:200]}")
+    try:
+        tokj = rtok.json()
+        token = tokj.get('token', {}).get('value', '')
+    except:
+        log(f"[Renew] token 获取失败: {rtok.text[:300]}")
         return False
-    # 5) 提交续费
+    if not token:
+        log(f"[Renew] token 无效: {rtok.text[:300]}")
+        return False
     final = session.post(url, headers=headers, data={
         "sess_id": sess_id,
         "ord_id": order_id,
@@ -237,25 +216,31 @@ def renew(sess_id, session, password, order_id, mailparser_id):
     log(f"[Renew] 未检测到成功: {snippet}")
     return False
 
-# —— 主流程 —— #
 def main():
-    if not (USERNAME and PASSWORD and MAILPARSER_DOWNLOAD_URL_ID):
-        log("请设置 USERNAME/PASSWORD/MAILPARSER_DOWNLOAD_URL_ID")
+    if not USERNAME or not PASSWORD or not MAILPARSER_DOWNLOAD_URL_ID:
+        log("[Main] 请确保环境变量 USERNAME, PASSWORD, MAILPARSER_DOWNLOAD_URL_ID 均已设置")
         return
+    user_list = USERNAME.strip().split()
+    passwd_list = PASSWORD.strip().split()
+    mailparser_list = MAILPARSER_DOWNLOAD_URL_ID.strip().split()
+    if len(user_list) != len(passwd_list) or len(user_list) != len(mailparser_list):
+        log("[Main] 用户名、密码、mailparser链接数量不匹配")
+        return
+    for idx, user in enumerate(user_list):
+        print("=" * 20)
+        log(f"[Main] 开始续费第 {idx + 1} 个账号：{user}")
+        sess_id, session = login(user, passwd_list[idx])
+        if sess_id == "-1":
+            log(f"[Main] 第 {idx + 1} 个账号登录失败")
+            continue
+        log("[Main] 登录成功后续处理暂未实现 get_servers() 方法")
+        # 示例：伪代码
+        # servers = get_servers(sess_id, session)
+        # for srv_id, need_renew in servers.items():
+        #     ...
+        time.sleep(10)
+    print("=" * 20)
+    log("[Main] 续费任务结束")
 
-    users, pwds = USERNAME.split(), PASSWORD.split()
-    mail_ids = MAILPARSER_DOWNLOAD_URL_ID.split()
-    for u,p,mid in zip(users,pwds,mail_ids):
-        log("="*20)
-        sid, sess = login(u,p)
-        if not sid: continue
-        svs = get_servers(sid, sess)
-        log(f"[Main] 找到 {len(svs)} 台 VPS")
-        for vid,need in svs.items():
-            if need: renew(sid, sess, vid, mid)
-            else: log(f"[Skip] {vid}")
-    # 通知可加在这里
-    log("完成")
-
-if __name__=="__main__":
+if __name__ == "__main__":
     main()

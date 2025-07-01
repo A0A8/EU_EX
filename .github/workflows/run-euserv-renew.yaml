@@ -25,10 +25,10 @@ jobs:
 
       - name: Run EUserv Auto Renew Script
         env:
-          EUSERV_USERNAME: ${{ secrets.EUSERV_USERNAME }}
-          EUSERV_PASSWORD: ${{ secrets.EUSERV_PASSWORD }}
-          OCR_SPACE_API_KEY: ${{ secrets.OCR_SPACE_API_KEY }}
+          EUSERV_USERNAME: ${{ secrets.USERNAME }}
+          EUSERV_PASSWORD: ${{ secrets.PASSWORD }}
+          OCR_SPACE_API_KEY: ${{ secrets.OCR_API_KEY }}
           MAILPARSER_DOWNLOAD_URL_ID: ${{ secrets.MAILPARSER_DOWNLOAD_URL_ID }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_USER_ID: ${{ secrets.TG_USER_ID }}
-        run: python euserv_auto_renew.py
+        run: python euserv.py

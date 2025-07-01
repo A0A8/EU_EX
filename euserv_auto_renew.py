@@ -151,7 +151,7 @@ def login(username: str, password: str) -> (str, requests.Session):
             "subaction": "login",
             "sess_id": sess_id,
         }
-        f = session.post(url, headers=headers, data=login_data)
+        f = session.post(url, headers=headers, data=data, proxies=PROXIES)
 
         # 打印登录响应内容前1000字符，方便调试
         snippet = f.text[:1000].replace('\n', ' ').replace('\r', ' ')

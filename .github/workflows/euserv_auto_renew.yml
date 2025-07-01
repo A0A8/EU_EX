@@ -12,7 +12,7 @@ jobs:
       USERNAME: ${{ secrets.USERNAME }}
       PASSWORD: ${{ secrets.PASSWORD }}
       MAILPARSER_DOWNLOAD_URL_ID: ${{ secrets.MAILPARSER_DOWNLOAD_URL_ID }}
-      OCR_API_KEY: ${{ secrets.OCR_API_KEY }}
+      OCRSPACE_API_KEY: ${{ secrets.OCR_API_KEY }}
       TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
       TG_USER_ID: ${{ secrets.TG_USER_ID }}
       TG_API_HOST: ${{ secrets.TG_API_HOST }}

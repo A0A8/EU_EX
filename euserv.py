@@ -266,9 +266,7 @@ def login(username: str, password: str) -> (str, requests.Session):
                     log("[Captcha Solver] 驗證通過")
                     return sess_id, session
                 else:
-                    log("[Captcha Solver] 驗證失敗
-
-")
+                    log("[Captcha Solver] 驗證失敗")
 
                     return "-1", session
         else:

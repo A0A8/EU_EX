@@ -2,8 +2,8 @@ name: EUserv Auto Renew
 
 on:
   schedule:
-    - cron: '0 0 * * *'  # Runs daily at midnight UTC
-  workflow_dispatch:  # Allows manual triggering
+    - cron: '0 0 * * *'  # 每天 UTC 午夜運行
+  workflow_dispatch:  # 允許手動觸發
 
 jobs:
   renew:

@@ -8,7 +8,7 @@ euserv 自動續期腳本
 * 增加登錄失敗重試機制
 * 日誌資訊格式化
 * 支援 UTF-8 編碼以避免 UnicodeEncodeError
-* 增強驗證碼識別邏輯
+* 增強會話管理和錯誤處理
 """
 
 import os
@@ -31,7 +31,7 @@ TG_USER_ID = os.getenv('TG_USER_ID', '').encode().decode('utf-8', errors='replac
 TG_API_HOST = "https://api.telegram.org"
 
 # 最大登錄重試次數
-LOGIN_MAX_RETRY_COUNT = 10  # 增加重試次數
+LOGIN_MAX_RETRY_COUNT = 10
 # 接收 PIN 的等待時間（秒）
 WAITING_TIME_OF_PIN = 30
 # 驗證碼識別最大嘗試次數
@@ -266,7 +266,10 @@ def login(username: str, password: str) -> (str, requests.Session):
                     log("[Captcha Solver] 驗證通過")
                     return sess_id, session
                 else:
-                    log("[Captcha Solver] 驗證失敗")
+                    log("[Captcha Solver] 驗證失敗
+
+")
+
                     return "-1", session
         else:
             return sess_id, session
@@ -286,6 +289,10 @@ def get_servers(sess_id: str, session: requests.Session) -> dict:
         f = session.get(url=url, headers=headers, timeout=10)
         f.raise_for_status()
         soup = BeautifulSoup(f.text.encode('utf-8', errors='replace').decode('utf-8'), "html.parser")
+        # 檢查 HTML 結構
+        if not soup.select("#kc2_order_customer_orders_tab_content_1"):
+            log("[AutoEUServerless] HTML 結構變化，無法找到訂單表格")
+            return {}
         for tr in soup.select(
             "#kc2_order_customer_orders_tab_content_1 .kc2_order_table.kc2_content_table tr"
         ):
@@ -378,9 +385,12 @@ def renew(
         }
         response = session.post(url, headers=headers, data=data, timeout=10)
         response.raise_for_status()
+        log(f"[AutoEUServerless] 續期請求響應: {response.text[:200]}")  # 記錄部分響應內容
+
+        # 增加等待時間，確保續期生效
+        time.sleep(10)
 
         # 驗證續期是否成功
-        time.sleep(5)
         servers = get_servers(sess_id, session)
         if order_id in servers and not servers[order_id]:
             log(f"[AutoEUServerless] ServerID: {order_id} 已成功續訂!")

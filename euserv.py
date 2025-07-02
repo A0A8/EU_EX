@@ -4,11 +4,13 @@
 euserv 自動續期腳本
 功能:
 * 使用 OCR.space 和 ddddocr 自動識別驗證碼
-* 发送通知到 Telegram
-* 增加登录失败重试机制
-* 日志信息格式化
-* 增强续期状态验证
+* 發送通知到 Telegram
+* 增加登錄失敗重試機制
+* 日誌資訊格式化
+* 支援 UTF-8 編碼以避免 UnicodeEncodeError
+* 增強續期狀態驗證
 """
+
 import os
 import re
 import json
@@ -18,14 +20,14 @@ import requests
 from bs4 import BeautifulSoup
 import ddddocr
 
-# 帳戶信息
-USERNAME = os.getenv('EUSERV_USERNAME')
-PASSWORD = os.getenv('EUSERV_PASSWORD')
-OCR_SPACE_API_KEY = os.getenv('OCR_SPACE_API_KEY')
-MAILPARSER_DOWNLOAD_URL_ID = os.getenv('MAILPARSER_DOWNLOAD_URL_ID')
+# 環境變數
+USERNAME = os.getenv('EUSERV_USERNAME', '').encode().decode('utf-8', errors='replace')
+PASSWORD = os.getenv('EUSERV_PASSWORD', '').encode().decode('utf-8', errors='replace')
+OCR_SPACE_API_KEY = os.getenv('OCR_SPACE_API_KEY', '').encode().decode('utf-8', errors='replace')
+MAILPARSER_DOWNLOAD_URL_ID = os.getenv('MAILPARSER_DOWNLOAD_URL_ID', '').encode().decode('utf-8', errors='replace')
 MAILPARSER_DOWNLOAD_BASE_URL = "https://files.mailparser.io/d/"
-TG_BOT_TOKEN = os.getenv('TG_BOT_TOKEN')
-TG_USER_ID = os.getenv('TG_USER_ID')
+TG_BOT_TOKEN = os.getenv('TG_BOT_TOKEN', '').encode().decode('utf-8', errors='replace')
+TG_USER_ID = os.getenv('TG_USER_ID', '').encode().decode('utf-8', errors='replace')
 TG_API_HOST = "https://api.telegram.org"
 
 # 代理設置（可選）
@@ -33,13 +35,14 @@ PROXIES = {"http": "http://127.0.0.1:10808", "https": "http://127.0.0.1:10808"}
 
 # 最大登錄重試次數
 LOGIN_MAX_RETRY_COUNT = 5
-WAITING_TIME_OF_PIN = 15
+# 接收 PIN 的等待時間（秒）
+WAITING_TIME_OF_PIN = 30
 
 user_agent = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/95.0.4638.69 Safari/537.36"
 )
-desp = ""  # 日志信息
+desp = ""  # 日誌資訊
 
 def log(info: str):
     emoji_map = {
@@ -59,13 +62,14 @@ def log(info: str):
         "[Captcha Solver]": "🧩",
         "[AutoEUServerless]": "🌐",
     }
+    info = info.encode('utf-8', errors='replace').decode('utf-8')
     for key, emoji in emoji_map.items():
         if key in info:
             info = emoji + " " + info
             break
     print(info)
     global desp
-    desp += info + "\.+"
+    desp += info + "\n\n"
 
 def login_retry(*args, **kwargs):
     def wrapper(func):
@@ -77,7 +81,7 @@ def login_retry(*args, **kwargs):
                 while number < max_retry:
                     number += 1
                     if number > 1:
-                        log("[AutoEUServerless] 登錄嘗試第 {} 次".format(number))
+                        log(f"[AutoEUServerless] 登錄嘗試第 {number} 次")
                     sess_id, session = func(username, password)
                     if sess_id != "-1":
                         return sess_id, session
@@ -89,7 +93,7 @@ def login_retry(*args, **kwargs):
 
 def captcha_solver(captcha_image_url: str, session: requests.session) -> dict:
     def ocr_space_recognize(image_data: bytes) -> str:
-        api_key = os.getenv('OCR_SPACE_API_KEY')
+        api_key = os.getenv('OCR_SPACE_API_KEY', '').encode().decode('utf-8', errors='replace')
         if not api_key:
             raise ValueError("OCR_SPACE_API_KEY 未設置")
         url = "https://api.ocr.space/parse/image"
@@ -97,7 +101,7 @@ def captcha_solver(captcha_image_url: str, session: requests.session) -> dict:
             "apikey": api_key,
             "language": "eng",
             "isOverlayRequired": False,
-            "base64Image": "data:image/jpeg;base64," + base64.b64encode(image_data).decode(),
+            "base64Image": "data:image/jpeg;base64," + base64.b64encode(image_data).decode('utf-8'),
             "isTable": False,
             "scale": True,
             "OCREngine": 2
@@ -144,7 +148,7 @@ def captcha_solver(captcha_image_url: str, session: requests.session) -> dict:
 
 def handle_captcha_solved_result(solved: dict) -> str:
     if "result" in solved:
-        text = str(solved["result"]).strip()
+        text = str(solved["result"]).strip().encode('utf-8', errors='replace').decode('utf-8')
         operators = ["X", "x", "+", "-"]
         if any(x in text for x in operators):
             for operator in operators:
@@ -175,7 +179,7 @@ def get_pin_from_mailparser(url_id: str) -> str:
         response.raise_for_status()
         data = response.json()
         if data and isinstance(data, list) and "pin" in data[0]:
-            pin = data[0]["pin"]
+            pin = str(data[0]["pin"]).encode('utf-8', errors='replace').decode('utf-8')
             return pin
         else:
             raise ValueError("無效的 Mailparser 響應")
@@ -185,7 +189,11 @@ def get_pin_from_mailparser(url_id: str) -> str:
 
 @login_retry(max_retry=LOGIN_MAX_RETRY_COUNT)
 def login(username: str, password: str) -> (str, requests.session):
-    headers = {"user-agent": user_agent, "origin": "https://www.euserv.com"}
+    headers = {
+        "user-agent": user_agent,
+        "origin": "https://www.euserv.com",
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"
+    }
     url = "https://support.euserv.com/index.iphp"
     captcha_image_url = "https://support.euserv.com/securimage_show.php"
     session = requests.Session()
@@ -197,8 +205,8 @@ def login(username: str, password: str) -> (str, requests.session):
         session.get("https://support.euserv.com/pic/logo_small.png", headers=headers, timeout=10)
 
         login_data = {
-            "email": username,
-            "password": password,
+            "email": username.encode('utf-8', errors='replace').decode('utf-8'),
+            "password": password.encode('utf-8', errors='replace').decode('utf-8'),
             "form_selected_language": "en",
             "Submit": "Login",
             "subaction": "login",
@@ -219,7 +227,7 @@ def login(username: str, password: str) -> (str, requests.session):
                     return "-1", session
                 try:
                     captcha_code = handle_captcha_solved_result(solved)
-                    log("[Captcha Solver] 識別的驗證碼是: {}".format(captcha_code))
+                    log(f"[Captcha Solver] 識別的驗證碼是: {captcha_code}")
                 except Exception as e:
                     log(f"[Captcha Solver] 處理驗證碼結果失敗: {e}")
                     return "-1", session
@@ -230,7 +238,7 @@ def login(username: str, password: str) -> (str, requests.session):
                     data={
                         "subaction": "login",
                         "sess_id": sess_id,
-                        "captcha_code": captcha_code,
+                        "captcha_code": captcha_code.encode('utf-8', errors='replace').decode('utf-8'),
                     },
                     timeout=10
                 )
@@ -251,10 +259,14 @@ def get_servers(sess_id: str, session: requests.session) -> dict:
     try:
         d = {}
         url = f"https://support.euserv.com/index.iphp?sess_id={sess_id}"
-        headers = {"user-agent": user_agent, "origin": "https://www.euserv.com"}
+        headers = {
+            "user-agent": user_agent,
+            "origin": "https://www.euserv.com",
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"
+        }
         f = session.get(url=url, headers=headers, timeout=10)
         f.raise_for_status()
-        soup = BeautifulSoup(f.text, "html.parser")
+        soup = BeautifulSoup(f.text.encode('utf-8', errors='replace').decode('utf-8'), "html.parser")
         for tr in soup.select(
             "#kc2_order_customer_orders_tab_content_1 .kc2_order_table.kc2_content_table tr"
         ):
@@ -269,7 +281,7 @@ def get_servers(sess_id: str, session: requests.session) -> dict:
                 == -1
                 else False
             )
-            d[server_id[0].get_text()] = flag
+            d[server_id[0].get_text().encode('utf-8', errors='replace').decode('utf-8')] = flag
         return d
     except Exception as e:
         log(f"[AutoEUServerless] 獲取服務器列表失敗: {e}")
@@ -282,8 +294,9 @@ def renew(
     headers = {
         "user-agent": user_agent,
         "Host": "support.euserv.com",
- "“origin": "https://www.euserv.com",
+        "origin": "https://www.euserv.com",
         "Referer": "https://support.euserv.com/index.iphp",
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
     }
     try:
         # 選擇續期訂單
@@ -294,10 +307,11 @@ def renew(
             "subaction": "choose_order",
             "choose_order_subaction": "show_contract_details",
         }
-        session.post(url, headers=headers, data=data, timeout=10)
+        response = session.post(url, headers=headers, data=data, timeout=10)
+        response.raise_for_status()
 
         # 觸發 PIN 發送
-        session.post(
+        response = session.post(
             url,
             headers=headers,
             data={
@@ -308,6 +322,7 @@ def renew(
             },
             timeout=10
         )
+        response.raise_for_status()
 
         # 等待並獲取 PIN
         time.sleep(WAITING_TIME_OF_PIN)
@@ -320,16 +335,16 @@ def renew(
 
         # 使用 PIN 獲取 token
         data = {
-            "auth": pin,
+            "auth": pin.encode('utf-8', errors='replace').decode('utf-8'),
             "sess_id": sess_id,
             "subaction": "kc2_security_password_get_token",
             "prefix": "kc2_customer_contract_details_extend_contract_",
-            "type": 1,
+            "type": "1",
             "ident": f"kc2_customer_contract_details_extend_contract_{order_id}",
         }
-        f = session.post(url, headers=headers, data=data, timeout=10)
-        f.raise_for_status()
-        response_data = json.loads(f.text)
+        response = session.post(url, headers=headers, data=data, timeout=10)
+        response.raise_for_status()
+        response_data = json.loads(response.text.encode('utf-8', errors='replace').decode('utf-8'))
         if response_data.get("rs") != "success":
             log(f"[AutoEUServerless] token 獲取失敗: {response_data}")
             return False
@@ -342,7 +357,8 @@ def renew(
             "subaction": "kc2_customer_contract_details_extend_contract_term",
             "token": token,
         }
-        session.post(url, headers=headers, data=data, timeout=10)
+        response = session.post(url, headers=headers, data=data, timeout=10)
+        response.raise_for_status()
 
         # 驗證續期是否成功
         time.sleep(5)
@@ -353,6 +369,9 @@ def renew(
         else:
             log(f"[AutoEUServerless] ServerID: {order_id} 續訂未生效!")
             return False
+    except UnicodeEncodeError as e:
+        log(f"[AutoEUServerless] 編碼錯誤: {e}")
+        return False
     except Exception as e:
         log(f"[AutoEUServerless] 續期過程中出錯: {e}")
         return False
@@ -378,18 +397,19 @@ def check(sess_id: str, session: requests.session):
 
 def telegram():
     message = (
-        "<b>AutoEUServerless 日志</b>\n\n" + desp +
-        "\n<b>版权声明：</b>\n"
-        "本脚本基于 GPL-3.0 许可协议，版权所有。\n\n"
-        "<b>致谢：</b>\n"
-        "特别感谢 <a href='https://github.com/lw9726/eu_ex'>eu_ex</a> 的贡献和启发, 本项目在此基础整理。\n"
-        "开发者：<a href='https://github.com/WizisCool'>WizisCool</a>\n"
-        "<a href='https://www.nodeseek.com/space/8902#/general'>个人Nodeseek主页</a>\n"
-        "<a href='https://dooo.ng'>个人小站Dooo.ng</a>\n\n"
-        "<b>支持项目：</b>\n"
-        "⭐️ 给我们一个 GitHub Star! ⭐️\n"
-        "<a href='https://github.com/WizisCool/AutoEUServerless'>访问 GitHub 项目</a>"
+        "<b>AutoEUServerless 日誌</b>\n\n" + desp +
+        "\n<b>版權聲明：</b>\n"
+        "本腳本基於 GPL-3.0 許可協議，版權所有。\n\n"
+        "<b>致謝：</b>\n"
+        "特別感謝 <a href='https://github.com/lw9726/eu_ex'>eu_ex</a> 的貢獻和啟發，本項目在此基礎整理。\n"
+        "開發者：<a href='https://github.com/WizisCool'>WizisCool</a>\n"
+        "<a href='https://www.nodeseek.com/space/8902#/general'>個人Nodeseek主頁</a>\n"
+        "<a href='https://dooo.ng'>個人小站Dooo.ng</a>\n\n"
+        "<b>支持項目：</b>\n"
+        "⭐️ 給我們一個 GitHub Star! ⭐️\n"
+        "<a href='https://github.com/WizisCool/AutoEUServerless'>訪問 GitHub 項目</a>"
     )
+    message = message.encode('utf-8', errors='replace').decode('utf-8')
     data = {
         "chat_id": TG_USER_ID,
         "text": message,
@@ -423,7 +443,7 @@ def main_handler(event, context):
         log(f"[AutoEUServerless] 正在續費第 {i + 1} 個賬號")
         sessid, s = login(user_list[i], passwd_list[i])
         if sessid == "-1":
-            log(f"[AutoEUServerless] 第 {i + 1} 個賬號登錄失敗，請檢查登錄信息")
+            log(f"[AutoEUServerless] 第 {i + 1} 個賬號登錄失敗，請檢查登錄資訊")
             continue
         servers = get_servers(sessid, s)
         log(f"[AutoEUServerless] 檢測到第 {i + 1} 個賬號有 {len(servers)} 台 VPS，正在嘗試續期")

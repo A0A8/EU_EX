@@ -8,7 +8,7 @@ euserv 自動續期腳本
 * 增加登錄失敗重試機制
 * 日誌資訊格式化
 * 支援 UTF-8 編碼以避免 UnicodeEncodeError
-* 增強續期狀態驗證
+* 增強驗證碼識別邏輯
 """
 
 import os
@@ -30,13 +30,12 @@ TG_BOT_TOKEN = os.getenv('TG_BOT_TOKEN', '').encode().decode('utf-8', errors='re
 TG_USER_ID = os.getenv('TG_USER_ID', '').encode().decode('utf-8', errors='replace')
 TG_API_HOST = "https://api.telegram.org"
 
-# 代理設置（可選）
-PROXIES = {"http": "http://127.0.0.1:10808", "https": "http://127.0.0.1:10808"}
-
 # 最大登錄重試次數
-LOGIN_MAX_RETRY_COUNT = 5
+LOGIN_MAX_RETRY_COUNT = 10  # 增加重試次數
 # 接收 PIN 的等待時間（秒）
 WAITING_TIME_OF_PIN = 30
+# 驗證碼識別最大嘗試次數
+CAPTCHA_MAX_RETRY_COUNT = 3
 
 user_agent = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -91,7 +90,7 @@ def login_retry(*args, **kwargs):
         return inner
     return wrapper
 
-def captcha_solver(captcha_image_url: str, session: requests.session) -> dict:
+def captcha_solver(captcha_image_url: str, session: requests.Session) -> dict:
     def ocr_space_recognize(image_data: bytes) -> str:
         api_key = os.getenv('OCR_SPACE_API_KEY', '').encode().decode('utf-8', errors='replace')
         if not api_key:
@@ -107,7 +106,7 @@ def captcha_solver(captcha_image_url: str, session: requests.session) -> dict:
             "OCREngine": 2
         }
         try:
-            response = requests.post(url, data=payload, timeout=10)
+            response = session.post(url, data=payload, timeout=10)
             response.raise_for_status()
             result = response.json()
             if "ParsedResults" in result and len(result["ParsedResults"]) > 0:
@@ -121,74 +120,94 @@ def captcha_solver(captcha_image_url: str, session: requests.session) -> dict:
         try:
             ocr = ddddocr.DdddOcr()
             result = ocr.classification(image_data)
-            return result
+            return result.strip()
         except Exception as e:
             raise Exception(f"ddddocr 錯誤: {e}")
 
-    try:
-        response = session.get(captcha_image_url, timeout=10)
-        response.raise_for_status()
-        image_data = response.content
+    for attempt in range(CAPTCHA_MAX_RETRY_COUNT):
         try:
-            ocr_space_result = ocr_space_recognize(image_data)
-            if ocr_space_result:
-                return {"result": ocr_space_result}
+            response = session.get(captcha_image_url, timeout=10)
+            response.raise_for_status()
+            image_data = response.content
+            log(f"[Captcha Solver] 驗證碼圖片下載成功 (嘗試 {attempt + 1}/{CAPTCHA_MAX_RETRY_COUNT})")
+            
+            # 嘗試 OCR.space
+            try:
+                ocr_space_result = ocr_space_recognize(image_data)
+                if ocr_space_result:
+                    log(f"[Captcha Solver] OCR.space 識別結果: {ocr_space_result}")
+                    return {"result": ocr_space_result}
+            except Exception as e:
+                log(f"[Captcha Solver] OCR.space 失敗: {e}")
+
+            # 嘗試 ddddocr
+            try:
+                ddddocr_result = ddddocr_recognize(image_data)
+                if ddddocr_result:
+                    log(f"[Captcha Solver] ddddocr 識別結果: {ddddocr_result}")
+                    return {"result": ddddocr_result}
+            except Exception as e:
+                log(f"[Captcha Solver] ddddocr 失敗: {e}")
+                
+            log(f"[Captcha Solver] 驗證碼識別失敗，正在重試 (嘗試 {attempt + 1}/{CAPTCHA_MAX_RETRY_COUNT})")
         except Exception as e:
-            log(f"[Captcha Solver] OCR.space 失敗: {e}")
-        try:
-            ddddocr_result = ddddocr_recognize(image_data)
-            if ddddocr_result:
-                return {"result": ddddocr_result}
-        except Exception as e:
-            log(f"[Captcha Solver] ddddocr 失敗: {e}")
-        return {"error": "兩種 OCR 服務均無法識別驗證碼"}
-    except Exception as e:
-        log(f"[Captcha Solver] 下載圖像時出錯: {e}")
-        return {"error": "無法下載驗證碼圖像"}
+            log(f"[Captcha Solver] 下載圖像失敗: {e}")
+        
+        if attempt < CAPTCHA_MAX_RETRY_COUNT - 1:
+            time.sleep(2)  # 等待 2 秒後重試
+            
+    return {"error": "兩種 OCR 服務均無法識別驗證碼"}
 
 def handle_captcha_solved_result(solved: dict) -> str:
     if "result" in solved:
         text = str(solved["result"]).strip().encode('utf-8', errors='replace').decode('utf-8')
-        operators = ["X", "x", "+", "-"]
-        if any(x in text for x in operators):
-            for operator in operators:
-                operator_pos = text.find(operator)
-                if operator == "x" or operator == "X":
-                    operator = "*"
-                if operator_pos != -1:
-                    left_part = text[:operator_pos].strip()
-                    right_part = text[operator_pos + 1:].strip()
-                    if left_part.isdigit() and right_part.isdigit():
-                        return str(eval(
-                            f"{left_part} {operator} {right_part}"
-                        ))
-                    else:
-                        return text
-        else:
-            return text
+        log(f"[Captcha Solver] 原始識別結果: {text}")
+        
+        # 移除非字母數字字符，僅保留可能有效的驗證碼
+        cleaned_text = re.sub(r'[^a-zA-Z0-9]', '', text)
+        if cleaned_text:
+            return cleaned_text
+        
+        # 如果識別結果包含運算符，嘗試計算
+        operators = ["X", "x", "+", "-", "*"]
+        for operator in operators:
+            operator_pos = text.find(operator)
+            if operator_pos != -1:
+                left_part = text[:operator_pos].strip()
+                right_part = text[operator_pos + 1:].strip()
+                if left_part.isdigit() and right_part.isdigit():
+                    operator = "*" if operator.lower() == "x" else operator
+                    try:
+                        return str(eval(f"{left_part} {operator} {right_part}"))
+                    except:
+                        pass
+        return cleaned_text or text
     else:
         log(f"[Captcha Solver] 無效的解析結果: {solved}")
         raise KeyError("未找到解析結果。")
 
 def get_pin_from_mailparser(url_id: str) -> str:
-    try:
-        response = requests.get(
-            f"{MAILPARSER_DOWNLOAD_BASE_URL}{url_id}",
-            timeout=10
-        )
-        response.raise_for_status()
-        data = response.json()
-        if data and isinstance(data, list) and "pin" in data[0]:
-            pin = str(data[0]["pin"]).encode('utf-8', errors='replace').decode('utf-8')
-            return pin
-        else:
-            raise ValueError("無效的 Mailparser 響應")
-    except Exception as e:
-        log(f"[MailParser] PIN 獲取失敗: {e}")
-        raise
+    for attempt in range(3):
+        try:
+            response = requests.get(
+                f"{MAILPARSER_DOWNLOAD_BASE_URL}{url_id}",
+                timeout=10
+            )
+            response.raise_for_status()
+            data = response.json()
+            if data and isinstance(data, list) and "pin" in data[0]:
+                pin = str(data[0]["pin"]).encode('utf-8', errors='replace').decode('utf-8')
+                return pin
+            else:
+                raise ValueError("無效的 Mailparser 響應")
+        except Exception as e:
+            log(f"[MailParser] PIN 獲取失敗 (嘗試 {attempt + 1}/3): {e}")
+            if attempt < 2:
+                time.sleep(10)
+    raise ValueError("多次嘗試後無法獲取 PIN")
 
 @login_retry(max_retry=LOGIN_MAX_RETRY_COUNT)
-def login(username: str, password: str) -> (str, requests.session):
+def login(username: str, password: str) -> (str, requests.Session):
     headers = {
         "user-agent": user_agent,
         "origin": "https://www.euserv.com",
@@ -255,7 +274,7 @@ def login(username: str, password: str) -> (str, requests.session):
         log(f"[AutoEUServerless] 登錄過程中出錯: {e}")
         return "-1", session
 
-def get_servers(sess_id: str, session: requests.session) -> dict:
+def get_servers(sess_id: str, session: requests.Session) -> dict:
     try:
         d = {}
         url = f"https://support.euserv.com/index.iphp?sess_id={sess_id}"
@@ -288,7 +307,7 @@ def get_servers(sess_id: str, session: requests.session) -> dict:
         return {}
 
 def renew(
-    sess_id: str, session: requests.session, password: str, order_id: str, mailparser_dl_url_id: str
+    sess_id: str, session: requests.Session, password: str, order_id: str, mailparser_dl_url_id: str
 ) -> bool:
     url = "https://support.euserv.com/index.iphp"
     headers = {
@@ -376,7 +395,7 @@ def renew(
         log(f"[AutoEUServerless] 續期過程中出錯: {e}")
         return False
 
-def check(sess_id: str, session: requests.session):
+def check(sess_id: str, session: requests.Session):
     try:
         log("[AutoEUServerless] 正在檢查續期狀態...")
         servers = get_servers(sess_id, session)
